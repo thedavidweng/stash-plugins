@@ -40,7 +40,14 @@ class TDClient:
         channel: Optional[str] = None,
         db_path: Optional[str] = None,
     ):
-        self.td_path = td_path or shutil.which("td") or "td"
+        local_bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "td")
+        if td_path:
+            self.td_path = td_path
+        elif os.path.exists(local_bundled) and os.access(local_bundled, os.X_OK):
+            self.td_path = local_bundled
+        else:
+            self.td_path = shutil.which("td") or "td"
+
         self.config_path = config_path
         self.channel = channel
         self.db_path = db_path
