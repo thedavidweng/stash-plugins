@@ -1,0 +1,49 @@
+name: TG Drive Backup
+description: Incremental, metadata-preserving backup and restore between Stash and Telegram channels via tg-drive-cli.
+version: 0.1.0
+url: https://github.com/thedavidweng/stash-plugins
+
+exec:
+  - python3
+  - "{pluginDir}/tg_drive.py"
+interface: raw
+
+tasks:
+  - name: Backup to Telegram
+    description: Incrementally upload scenes, native video presentation, and metadata bundle to Telegram.
+    defaultArgs:
+      mode: backup
+  - name: Dry Run Preview
+    description: Preview which scenes and media would be uploaded without making changes.
+    defaultArgs:
+      mode: dry_run
+  - name: Verify Ledger & Hashes
+    description: Check the local sync ledger and summary statistics without downloading media.
+    defaultArgs:
+      mode: verify
+  - name: Disaster Recovery Restore
+    description: Restore media tree and metadata bundle from Telegram into the Stash library.
+    defaultArgs:
+      mode: restore
+
+settings:
+  td_binary_path:
+    displayName: tg-drive-cli Binary Path
+    description: Absolute path to td executable (leave empty if in system PATH).
+    type: STRING
+  target_channel:
+    displayName: Target Telegram Channel
+    description: Channel ID or username (leave empty to use default channel bound by td init).
+    type: STRING
+  max_file_size_gb:
+    displayName: Max File Size (GB)
+    description: Maximum scene size to upload (2.0 GB standard, 4.0 GB Telegram Premium). Scenes above this limit are safely skipped and reported.
+    type: NUMBER
+  batch_size:
+    displayName: Batch Size (Scenes per run)
+    description: Number of scenes to process in one backup run (avoids long-running task timeouts).
+    type: NUMBER
+  restore_dir:
+    displayName: Restore Target Directory
+    description: Local destination path when restoring media from Telegram.
+    type: STRING

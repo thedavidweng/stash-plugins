@@ -31,7 +31,7 @@ buildPlugin()
     
     # create the zip file
     # copy other files
-    zipfile=$(realpath "$outdir/$plugin_id.zip")
+    zipfile=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "$outdir/$plugin_id.zip")
     
     pushd "$dir" > /dev/null
     zip -r "$zipfile" . > /dev/null
@@ -43,6 +43,12 @@ buildPlugin()
     version="$ymlVersion-$version"
     IFS=$'\n' dep=$(grep "^# requires:" "$f" | cut -c 12- | sed -e 's/\r//')
 
+    if command -v shasum > /dev/null 2>&1; then
+        sha=$(shasum -a 256 "$zipfile" | cut -d' ' -f1)
+    else
+        sha=$(sha256sum "$zipfile" | cut -d' ' -f1)
+    fi
+
     # write to spec index
     echo "- id: $plugin_id
   name: $name
@@ -51,7 +57,7 @@ buildPlugin()
   version: $version
   date: $updated
   path: $plugin_id.zip
-  sha256: $(sha256sum "$zipfile" | cut -d' ' -f1)" >> "$outdir"/index.yml
+  sha256: $sha" >> "$outdir"/index.yml
 
     # handle dependencies
     if [ ! -z "$dep" ]; then
