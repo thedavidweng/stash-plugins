@@ -41,6 +41,7 @@ def main() -> None:
     parser.add_argument("--max-size-gb", type=float, default=2.0, help="Maximum file size in GB")
     parser.add_argument("--batch-size", type=int, default=50, help="Maximum scenes to process per run")
     parser.add_argument("--restore-dir", default=None, help="Directory to restore media into")
+    parser.add_argument("--sqlite-path", default=None, help="Path to stash-go.sqlite fallback")
     cli_args = parser.parse_args()
 
     # Read stdin payload from Stash
@@ -61,7 +62,18 @@ def main() -> None:
     api_key = server_conn.get("ApiKey") or plugin_settings.get("api_key")
     session_cookie = server_conn.get("SessionCookie")
 
-    stash = StashClient(base_url=base_url, api_key=api_key, session_cookie=session_cookie)
+    sqlite_path = cli_args.sqlite_path or plugin_settings.get("sqlite_path")
+    if not sqlite_path:
+        default_sqlite = "/root/.stash/stash-go.sqlite"
+        if os.path.exists(default_sqlite):
+            sqlite_path = default_sqlite
+
+    stash = StashClient(
+        base_url=base_url,
+        api_key=api_key,
+        session_cookie=session_cookie,
+        sqlite_path=sqlite_path,
+    )
 
     # Configure TD Client
     td_path = plugin_settings.get("td_binary_path") or cli_args.td_path
