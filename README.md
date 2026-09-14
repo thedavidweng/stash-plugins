@@ -1,24 +1,40 @@
-# Template for creating Stash plugins source index
+# Stash Plugins Repository
 
-This template allows you to create a new repository with a few clicks with preconfigured GitHub action to publish your plugins source index. 
-_This assumes you already know how to create plugins for Stash. If you don't, first read [this](https://docs.stashapp.cc/in-app-manual/plugins/#creating-plugins)._
+Personal repository of community plugins for **[Stash](https://github.com/stashapp/stash)**, managed and published according to Stash official best practices.
 
-## How to use it?
+---
 
-1. Click **Use this template** > **Create a new repository**. 
-1. Choose a repository name and click **Create repository**.
-1. Open **Settings** and head to **Pages**.
-1. Under Build and deployment select the Source as GitHub Actions.
+## Available Plugins
 
-Now add your plugins to [plugins](/plugins) directory and they will be automatically published to the source index.
+| Plugin | ID | Description | Docs |
+| :--- | :--- | :--- | :--- |
+| **TG Drive Backup** | `tgDrive` | Incremental, metadata-preserving backup and disaster recovery connecting Stash to Telegram channels via `tg-drive-cli`. | [README](plugins/tgDrive/README.md) |
 
-Source index URL: [`https://<your-username>.github.io/<repository-name>/main/index.yml`](https://<your-username>.github.io/<repository-name>/main/index.yml)
+---
 
-## Share your plugins
+## How to Install in Stash
 
-- [Create a new topic](https://discourse.stashapp.cc/t/-/33) for your plugin on the community forum.
-- [Add your source index to the list](https://discourse.stashapp.cc/t/-/122) on the Stash community forum.
+1. Open your Stash instance.
+2. Go to **Settings** $\rightarrow$ **Plugins** $\rightarrow$ **Available Sources**.
+3. Add this source index URL:
+   ```
+   https://thedavidweng.github.io/stash-plugins/main/index.yml
+   ```
+4. Navigate to **Available**, find **TG Drive Backup**, and click **Install**.
+
+---
+
+## Key Design Principles
+
+All plugins in this repository strictly adhere to:
+- **Zero-Surgery & Provenance**: Remote storage preserves byte-level integrity so native hashes (`oshash`, `pHash`, `MD5`) match upon restore without custom surgery.
+- **Human-First Presentation**: Media uploaded to Telegram remains playable in-app with native video presentation (duration, dimensions, streaming flags, cover artwork) and clean UTF-16 budgeted captions.
+- **First-Class Auditing**: Physical platform limits (such as Telegram's 2 GB / 4 GB ceiling) are handled with explicit upfront gatekeepers and coverage reports, not silent failures or destructive splitting.
+
+See [plugins/tgDrive/README.md](plugins/tgDrive/README.md) for full architectural trade-offs and disaster recovery procedures.
+
+---
 
 ## License
 
-The default license is set to [AGPL-3.0](/LICENCE). Before publishing any plugins you can change it.
+Licensed under [AGPL-3.0](LICENCE).
