@@ -1,6 +1,13 @@
 """
 Client wrapper for tg-drive-cli (td) binary.
 Communicates via stdin/stdout JSON contract and maps exit codes/errors to Python exceptions.
+
+Contract notes (docs/contracts/cli-contract.md of tg-drive-cli):
+- uploads use `td cp <local> <remote-path> [--replace --confirm ...]`
+- downloads use `td get <remote-path> <local-dest> [--recursive]`
+  (`td cp` is upload-only; using it for downloads would upload instead)
+- `td get <dir> <dest> --recursive` places the remote directory's CONTENTS
+  under dest (the remote dir name is not recreated)
 """
 import json
 import os
@@ -24,12 +31,12 @@ class TDRateLimitedError(TDError):
 
 class TDLockedError(TDError):
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, code="ERR_LOCKED", details=details)
+        super().__init__(message, code="ERR_OPERATION_LOCKED", details=details)
 
 
 class TDNotFoundError(TDError):
     def __init__(self, message: str, details: Optional[Dict[str, Any]] = None):
-        super().__init__(message, code="ERR_NOT_FOUND", details=details)
+        super().__init__(message, code="ERR_REMOTE_NOT_FOUND", details=details)
 
 
 class TDClient:
@@ -39,23 +46,41 @@ class TDClient:
         config_path: Optional[str] = None,
         channel: Optional[str] = None,
         db_path: Optional[str] = None,
+        data_dir: Optional[str] = None,
     ):
-        local_bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "td")
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        executable = "td.exe" if os.name == "nt" else "td"
+        local_bundled = os.path.join(plugin_dir, executable)
+        local_plugin_binary = os.path.join(plugin_dir, "bin", executable)
         if td_path:
             self.td_path = td_path
+        elif os.path.exists(local_plugin_binary) and (
+            os.name == "nt"
+            or os.access(local_plugin_binary, os.X_OK)
+        ):
+            self.td_path = local_plugin_binary
         elif os.path.exists(local_bundled) and os.access(local_bundled, os.X_OK):
             self.td_path = local_bundled
         else:
             self.td_path = shutil.which("td") or "td"
 
-        self.config_path = config_path
+        if data_dir:
+            data_dir = os.path.abspath(os.path.expanduser(data_dir))
+            self.config_path = config_path or os.path.join(data_dir, "config.toml")
+            self.session_path = os.path.join(data_dir, "session.json")
+            self.db_path = db_path or os.path.join(data_dir, "local_cache.db")
+        else:
+            self.config_path = config_path
+            self.session_path = None
+            self.db_path = db_path
         self.channel = channel
-        self.db_path = db_path
 
     def _build_cmd(self, subcmd: str, args: List[str]) -> List[str]:
         cmd = [self.td_path, subcmd]
         if self.config_path:
             cmd.extend(["--config", self.config_path])
+        if self.session_path:
+            cmd.extend(["--session", self.session_path])
         if self.channel:
             cmd.extend(["--channel", self.channel])
         if self.db_path:
@@ -63,6 +88,22 @@ class TDClient:
         cmd.extend(args)
         cmd.append("--json")
         return cmd
+
+    def version(self) -> Dict[str, Any]:
+        """Return td version information."""
+        return self._exec(self._build_cmd("version", []))
+
+    def auth_status(self) -> Dict[str, Any]:
+        """Return Telegram authentication status."""
+        return self._exec(self._build_cmd("auth", ["status"]))
+
+    def doctor(self) -> Dict[str, Any]:
+        """Run td's local and Telegram capability checks."""
+        return self._exec(self._build_cmd("doctor", []))
+
+    def status(self) -> Dict[str, Any]:
+        """Return the configured drive index status."""
+        return self._exec(self._build_cmd("status", []))
 
     def _exec(self, cmd: List[str]) -> Dict[str, Any]:
         try:
@@ -95,17 +136,14 @@ class TDClient:
             if code == "ERR_TELEGRAM_RATE_LIMITED":
                 retry_after = details.get("retry_after_seconds", 30)
                 raise TDRateLimitedError(msg, retry_after, details)
-            elif code == "ERR_LOCKED":
+            elif code == "ERR_OPERATION_LOCKED":
                 raise TDLockedError(msg, details)
-            elif code == "ERR_NOT_FOUND":
+            elif code == "ERR_REMOTE_NOT_FOUND":
                 raise TDNotFoundError(msg, details)
             else:
                 raise TDError(msg, code, details)
 
         return envelope.get("data", {})
-
-    def version(self) -> Dict[str, Any]:
-        return self._exec([self.td_path, "version", "--json"])
 
     def upload_file(
         self,
@@ -119,7 +157,7 @@ class TDClient:
         thumb_path: Optional[str] = None,
         replace: bool = False,
     ) -> Dict[str, Any]:
-        """Upload single file with presentation attributes."""
+        """Upload single file with presentation attributes (td cp)."""
         args = [local_path, remote_path]
         if as_kind:
             args.extend(["--as", as_kind])
@@ -135,24 +173,17 @@ class TDClient:
             args.extend(["--thumb", thumb_path])
         if replace:
             args.extend(["--replace", "--confirm"])
-        
+
         cmd = self._build_cmd("cp", args)
         return self._exec(cmd)
 
-    def upload_album(
-        self,
-        file_paths: List[str],
-        remote_dir: str,
-    ) -> Dict[str, Any]:
-        """Upload multiple files as a native media group album."""
-        args = list(file_paths) + [remote_dir]
-        cmd = self._build_cmd("cp", args)
-        return self._exec(cmd)
-
-    def list_dir(self, remote_path: str) -> Dict[str, Any]:
-        """List remote directory entries (with hashes)."""
+    def list_dir(self, remote_path: str) -> List[Dict[str, Any]]:
+        """List remote directory entries: {name, path, type, size, hash, status}."""
         cmd = self._build_cmd("ls", [remote_path])
-        return self._exec(cmd)
+        data = self._exec(cmd)
+        if isinstance(data, list):
+            return data
+        return data.get("entries", [])
 
     def scan(self, full: bool = True) -> Dict[str, Any]:
         """Trigger td scan to rebuild or update index from Telegram."""
@@ -160,10 +191,28 @@ class TDClient:
         cmd = self._build_cmd("scan", args)
         return self._exec(cmd)
 
-    def download(self, remote_path: str, local_dest: str, recursive: bool = False) -> Dict[str, Any]:
-        """Download remote file or directory."""
+    def download(
+        self,
+        remote_path: str,
+        local_dest: str,
+        recursive: bool = False,
+        skip_existing: bool = False,
+        continue_on_error: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Download a remote file or directory (td get).
+
+        For a file: local_dest is the exact destination path (or an existing
+        directory, in which case the remote basename is appended).
+        For recursive directories: the remote directory's contents are placed
+        under local_dest.
+        """
         args = [remote_path, local_dest]
         if recursive:
             args.append("--recursive")
-        cmd = self._build_cmd("cp", args)
+        if skip_existing:
+            args.append("--skip-existing")
+        if continue_on_error:
+            args.append("--continue-on-error")
+        cmd = self._build_cmd("get", args)
         return self._exec(cmd)

@@ -8,3 +8,9 @@ __pycache__/
 .zip
 _site/
 .DS_Store
+plugins/tgDrive/.td-runtime/
+plugins/tgDrive/td-data/
+plugins/tgDrive/bin/
+plugins/tgDrive/td*.tar.gz
+plugins/tgDrive/td*.tgz
+plugins/tgDrive/td*.zip

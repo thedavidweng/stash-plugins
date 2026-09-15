@@ -11,23 +11,23 @@ from td_client import TDClient, TDRateLimitedError, TDLockedError, TDNotFoundErr
 
 class TestTDClient(unittest.TestCase):
     def setUp(self):
-        self.client = TDClient(td_path="/mock/td")
+        self.client = TDClient(td_path="/mock/td", data_dir="/td-data")
+
+    def _mock_run(self, data, returncode=0):
+        return MagicMock(
+            returncode=returncode,
+            stdout=json.dumps({"ok": True, "data": data}),
+            stderr="",
+        )
 
     @patch("subprocess.run")
     def test_upload_success(self, mock_run):
-        mock_run.return_value = MagicMock(
-            returncode=0,
-            stdout=json.dumps({
-                "ok": True,
-                "data": {
-                    "path": "/data/test.mp4",
-                    "message_id": 999,
-                    "hash": "blake3:deadbeef",
-                    "size": 12345
-                }
-            }),
-            stderr="",
-        )
+        mock_run.return_value = self._mock_run({
+            "path": "/data/test.mp4",
+            "message_id": 999,
+            "hash": "blake3:deadbeef",
+            "size": 12345
+        })
 
         res = self.client.upload_file(
             local_path="/local/test.mp4",
@@ -41,6 +41,34 @@ class TestTDClient(unittest.TestCase):
 
         self.assertEqual(res["message_id"], 999)
         self.assertEqual(res["hash"], "blake3:deadbeef")
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[:2], ["/mock/td", "cp"])
+        self.assertIn("--as", cmd)
+        self.assertIn("video", cmd)
+        self.assertIn("--streaming", cmd)
+
+    @patch("subprocess.run")
+    def test_upload_replace_requires_confirm(self, mock_run):
+        mock_run.return_value = self._mock_run({"path": "/data/test.mp4", "message_id": 1})
+        self.client.upload_file("/a", "/b", replace=True)
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--replace", cmd)
+        self.assertIn("--confirm", cmd)
+
+    @patch("subprocess.run")
+    def test_download_uses_get_not_cp(self, mock_run):
+        """Regression: downloads must use `td get` (td cp is upload-only)."""
+        mock_run.return_value = self._mock_run({"downloaded": 3, "skipped": 0, "failed": 0})
+
+        self.client.download("/data", "/restore/data", recursive=True, skip_existing=True, continue_on_error=True)
+
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[1], "get")
+        self.assertNotIn("cp", cmd[:2])
+        self.assertEqual(cmd[cmd.index("/data"):cmd.index("/data") + 2], ["/data", "/restore/data"])
+        self.assertIn("--recursive", cmd)
+        self.assertIn("--skip-existing", cmd)
+        self.assertIn("--continue-on-error", cmd)
 
     @patch("subprocess.run")
     def test_rate_limited_error(self, mock_run):
@@ -70,7 +98,7 @@ class TestTDClient(unittest.TestCase):
             stdout=json.dumps({
                 "ok": False,
                 "error": {
-                    "code": "ERR_LOCKED",
+                    "code": "ERR_OPERATION_LOCKED",
                     "message": "Operation locked"
                 }
             }),
@@ -79,6 +107,52 @@ class TestTDClient(unittest.TestCase):
 
         with self.assertRaises(TDLockedError):
             self.client.upload_file("/a", "/b")
+
+    @patch("subprocess.run")
+    def test_not_found_error(self, mock_run):
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout=json.dumps({
+                "ok": False,
+                "error": {
+                    "code": "ERR_REMOTE_NOT_FOUND",
+                    "message": "remote path not found"
+                }
+            }),
+            stderr="",
+        )
+
+        with self.assertRaises(TDNotFoundError):
+            self.client.download("/gone.zip", "/tmp/x.zip")
+
+    @patch("subprocess.run")
+    def test_list_dir_parses_contract_envelope(self, mock_run):
+        """td ls --json data is {path, entries: [...]}, not a bare array."""
+        mock_run.return_value = self._mock_run({
+            "path": "/",
+            "entries": [
+                {"type": "dir", "name": "volume1", "path": "/volume1"},
+                {"type": "file", "name": "loose.mp4", "path": "/loose.mp4",
+                 "size": 5, "hash": "blake3:abc"},
+            ],
+        })
+        entries = self.client.list_dir("/")
+        self.assertEqual(len(entries), 2)
+        self.assertEqual(entries[0]["name"], "volume1")
+        self.assertEqual(entries[1]["hash"], "blake3:abc")
+
+    @patch("subprocess.run")
+    def test_data_directory_is_passed_to_td(self, mock_run):
+        mock_run.return_value = self._mock_run({"authenticated": False})
+
+        self.client.auth_status()
+
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[:8], [
+            "/mock/td", "auth", "--config", "/td-data/config.toml",
+            "--session", "/td-data/session.json", "--db", "/td-data/local_cache.db",
+        ])
+        self.assertEqual(cmd[-1], "--json")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 name: TG Drive Backup
-description: Incremental, metadata-preserving backup and restore between Stash and Telegram channels via tg-drive-cli.
-version: 0.1.0
+description: Configurable, metadata-preserving backup and disaster recovery between Stash and Telegram channels via tg-drive-cli. All Stash access goes through the GraphQL API.
+version: 0.3.0
 url: https://github.com/thedavidweng/stash-plugins
 
 exec:
@@ -9,41 +9,89 @@ exec:
 interface: raw
 
 tasks:
+  - name: TD Drive Setup Guide
+    description: 'Shows the one-time setup instructions, safe container-terminal commands, resolved td path, and persistent data directory. Telegram credentials and login codes must never be entered in Stash. Full guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
+    defaultArgs:
+      mode: setup
+  - name: TD Drive Health Check
+    description: 'Verifies the td binary, persistent data directory, Telegram login, td capabilities, and initialized drive root. Failures include actionable guidance. Full guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
+    defaultArgs:
+      mode: health
+  - name: Install / Update TD Core
+    description: 'Explicitly downloads the matching td release from GitHub, verifies checksums.txt, and installs it into the plugin bin directory. This never runs automatically during backup. Clear TD Core Path first if you use a custom binary.'
+    defaultArgs:
+      mode: install_core
   - name: Backup to Telegram
-    description: Incrementally upload scenes, native video presentation, and metadata bundle to Telegram.
+    description: 'Incrementally uploads scene media (byte-exact, native video presentation) and, per settings, a native Stash metadata export, a database snapshot, and config.yml - all produced through Stash''s GraphQL API. If setup is incomplete, run TD Drive Health Check and follow the English guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
     defaultArgs:
       mode: backup
   - name: Dry Run Preview
-    description: Preview which scenes and media would be uploaded without making changes.
+    description: Simulates a backup run and logs what would be uploaded, without uploading anything.
     defaultArgs:
       mode: dry_run
   - name: Verify Ledger & Hashes
-    description: Check the local sync ledger and summary statistics without downloading media.
+    description: Audits the local sync ledger and displays statistics (published, skipped, failed) without uploading or downloading.
     defaultArgs:
       mode: verify
   - name: Disaster Recovery Restore
-    description: Restore media tree and metadata bundle from Telegram into the Stash library.
+    description: Rebuilds the media tree from Telegram into the configured restore directory, scans it in Stash, and imports the metadata export via GraphQL. Database/config backups are placed under stash-recovery for manual application.
     defaultArgs:
       mode: restore
 
 settings:
-  td_binary_path:
-    displayName: tg-drive-cli Binary Path
-    description: Absolute path to td executable (leave empty if in system PATH).
-    type: STRING
-  target_channel:
-    displayName: Target Telegram Channel
-    description: Channel ID or username (leave empty to use default channel bound by td init).
-    type: STRING
+  backup_scenes:
+    displayName: Backup Scene Media
+    description: Upload scene video files byte-exact with native Telegram video presentation. Default true.
+    type: BOOLEAN
+  backup_metadata:
+    displayName: Backup Metadata Export
+    description: Export all Stash metadata via GraphQL (scenes with markers/ratings/associations, performers, studios, tags, groups, fingerprints) and upload it to /stash-metadata/export.zip. Restorable via the Disaster Recovery task. Default true.
+    type: BOOLEAN
+  backup_database:
+    displayName: Backup Database Snapshot
+    description: Ask Stash to snapshot its SQLite database via GraphQL backupDatabase (blobs included on Stash >= 0.31) and upload it to /stash-backup/database/stash-backup.zip. Default true.
+    type: BOOLEAN
+  backup_config:
+    displayName: Backup config.yml
+    description: Upload Stash's raw config.yml to /stash-backup/config/config.yml. WARNING - config.yml contains credentials (API keys, stash-box tokens). Only enable on a private channel you control. Default false.
+    type: BOOLEAN
   max_file_size_gb:
     displayName: Max File Size (GB)
-    description: Maximum scene size to upload (2.0 GB standard, 4.0 GB Telegram Premium). Scenes above this limit are safely skipped and reported.
+    description: Telegram ceiling per file (2.0 standard, 4.0 Premium). Scene files and database snapshots above this are skipped and reported. Default 2.0.
     type: NUMBER
   batch_size:
     displayName: Batch Size (Scenes per run)
-    description: Number of scenes to process in one backup run (avoids long-running task timeouts).
+    description: Maximum scenes to process in one backup run; 0 processes all. Default 50.
     type: NUMBER
+  job_timeout_minutes:
+    displayName: Restore Job Timeout (minutes)
+    description: How long the restore task waits for the Stash library scan and metadata import jobs to finish. Default 120.
+    type: NUMBER
+  server_timeout_seconds:
+    displayName: Server Timeout (seconds)
+    description: HTTP timeout for regular Stash GraphQL calls. Default 120.
+    type: NUMBER
+  export_timeout_seconds:
+    displayName: Export Timeout (seconds)
+    description: HTTP timeout for synchronous GraphQL export/backup calls (exportObjects, backupDatabase). Default 1800.
+    type: NUMBER
+  td_binary_path:
+    displayName: tg-drive-cli Binary Path
+    description: Optional container-visible path to a td executable or release archive (.tar.gz, .tgz, or .zip). Leave empty to use the plugin bin directory or PATH. Do not enter Telegram credentials here.
+    type: STRING
+  td_data_dir:
+    displayName: TD Data Directory
+    description: Persistent, container-visible directory for td config.toml, session.json, and local_cache.db. Leave empty to use the plugin's excluded td-data directory, or set an explicit Docker/NAS volume path. Never place this in a published plugin archive or enter secrets in Stash settings.
+    type: STRING
+  td_version:
+    displayName: TD Core Version
+    description: Release tag for the plugin-managed td core, or latest. Updates are user-triggered by the Install / Update TD Core task and are never silent.
+    type: STRING
+  target_channel:
+    displayName: Target Telegram Channel
+    description: Channel ID or username (leave empty to use the default channel bound by td init).
+    type: STRING
   restore_dir:
     displayName: Restore Target Directory
-    description: Local destination path when restoring media from Telegram.
+    description: Local destination path used by the Disaster Recovery Restore task. Required for restore.
     type: STRING

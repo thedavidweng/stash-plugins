@@ -34,7 +34,19 @@ buildPlugin()
     zipfile=$(python3 -c "import os, sys; print(os.path.abspath(sys.argv[1]))" "$outdir/$plugin_id.zip")
     
     pushd "$dir" > /dev/null
-    zip -r "$zipfile" . > /dev/null
+    # exclude runtime artifacts so they never ship in the plugin zip
+    zip -r "$zipfile" . \
+        -x "*__pycache__*" \
+        -x "*.pyc" \
+        -x "ledger.sqlite" \
+        -x "*.sqlite" \
+        -x ".DS_Store" \
+        -x ".td-runtime/*" \
+        -x "td-data/*" \
+        -x "bin/*" \
+        -x "td*.tar.gz" \
+        -x "td*.tgz" \
+        -x "td*.zip" > /dev/null
     popd > /dev/null
 
     name=$(grep "^name:" "$f" | head -n 1 | cut -d' ' -f2- | sed -e 's/\r//' -e 's/^"\(.*\)"$/\1/')

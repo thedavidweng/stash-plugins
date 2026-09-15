@@ -1,0 +1,21 @@
+name: Plugin tests
+
+on:
+  push:
+    paths:
+      - 'plugins/**'
+  pull_request:
+    paths:
+      - 'plugins/**'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Run tgDrive unit tests
+        run: |
+          cd plugins/tgDrive
+          python3 -m unittest discover -s tests -v
