@@ -212,15 +212,135 @@ Run **Dry Run Preview** before the first real backup.
 
 ### Linux
 
-Use the release asset matching the Stash runtime:
+Linux is the primary target for Docker, NAS, and most Stash server
+installations. The release assets currently supported by `td` are:
 
 ```text
 td_linux_x86_64.tar.gz
 td_linux_arm64.tar.gz
 ```
 
-The platform and architecture are those of the Stash process. A Linux Docker
-container needs a Linux binary even when the host is macOS or Windows.
+The platform and architecture are those of the Stash **process**:
+
+| `uname -m` | Release asset |
+| :--- | :--- |
+| `x86_64` or `amd64` | `td_linux_x86_64.tar.gz` |
+| `aarch64` or `arm64` | `td_linux_arm64.tar.gz` |
+
+#### Recommended Linux installation
+
+From the Stash plugin page, run **Install / Update TD Core**. The plugin
+detects the Linux architecture, downloads the matching GitHub release,
+verifies `checksums.txt`, and installs `td` into the plugin `bin/` directory.
+Then run **TD Drive Health Check**.
+
+This is the easiest option for a normal Linux host and for a Linux-based
+Stash container.
+
+#### Manual Linux installation
+
+Use this when the Stash runtime cannot reach GitHub, or when you want to
+provide the binary yourself. Run the commands in the environment where Stash
+will execute the plugin:
+
+```sh
+# Replace this with the container-visible plugin directory.
+PLUGIN_DIR=/plugins/tgDrive
+
+case "$(uname -m)" in
+  x86_64|amd64) TD_ASSET=td_linux_x86_64.tar.gz ;;
+  aarch64|arm64) TD_ASSET=td_linux_arm64.tar.gz ;;
+  *) echo "Unsupported Linux architecture: $(uname -m)" >&2; exit 1 ;;
+esac
+
+VERSION=v1.2.3                 # choose a real td release tag
+BASE_URL="https://github.com/thedavidweng/tg-drive-cli/releases/download/$VERSION"
+mkdir -p "$PLUGIN_DIR/bin"
+cd /tmp
+
+curl -fL "$BASE_URL/$TD_ASSET" -o "$TD_ASSET"
+curl -fL "$BASE_URL/checksums.txt" -o checksums.txt
+grep "  $TD_ASSET\$" checksums.txt | sha256sum -c -
+tar -xzf "$TD_ASSET" -C "$PLUGIN_DIR/bin"
+chmod 755 "$PLUGIN_DIR/bin/td"
+"$PLUGIN_DIR/bin/td" version
+```
+
+If the container has no `curl`, download the archive and `checksums.txt` on
+the host, verify them there, and copy the archive into the container-visible
+plugin directory. Alternatively, use a `wget` equivalent or the plugin's
+Install / Update task.
+
+Do not use a macOS or Windows binary in a Linux container. A Linux Docker
+container needs a Linux binary even when the Docker host is macOS or Windows.
+
+#### Linux Docker path example
+
+The following example keeps both the plugin and TD data on a persistent
+Docker volume:
+
+```text
+NAS/host:  /volume1/docker/stash/config/plugins/tgDrive
+Container: /plugins/tgDrive
+
+NAS/host:  /volume1/docker/stash/tg-drive-data
+Container: /td-data
+```
+
+Set these plugin settings:
+
+```text
+TD Core Path:      /plugins/tgDrive/bin/td
+TD Data Directory: /td-data
+```
+
+Then open the container shell and authenticate:
+
+```sh
+docker exec -it stash sh
+
+TD=/plugins/tgDrive/bin/td
+TD_DATA=/td-data
+mkdir -p "$TD_DATA"
+
+"$TD" --config "$TD_DATA/config.toml" \
+  --session "$TD_DATA/session.json" \
+  --db "$TD_DATA/local_cache.db" auth setup
+
+"$TD" --config "$TD_DATA/config.toml" \
+  --session "$TD_DATA/session.json" \
+  --db "$TD_DATA/local_cache.db" auth login
+```
+
+Use the container-visible Stash media path with `td init`, then run
+**TD Drive Health Check**. The NAS path `/volume1/...` is only valid inside
+Stash if it is mounted at that exact path; normally you must use the
+container path such as `/data`.
+
+#### Linux without Docker
+
+On a regular Linux host, you can either use the plugin-managed installer or
+place `td` in the plugin's `bin/` directory. You may also install it in a
+system directory such as `/usr/local/bin/td` and leave **TD Core Path** empty
+so the plugin finds it through `PATH`.
+
+Keep the TD data directory persistent, for example:
+
+```sh
+TD_DATA=/var/lib/tg-drive-cli
+sudo install -d -m 700 "$TD_DATA"
+```
+
+The Stash service user must be able to read and write this directory. Run
+`auth setup`, `auth login`, and `td init` as that same service user, or grant
+the service user ownership:
+
+```sh
+sudo chown -R stash:stash "$TD_DATA"
+```
+
+Replace `stash:stash` with the actual user and group running Stash. Continue
+with the authentication steps above, using the chosen `TD_DATA` path.
 
 ### macOS
 
