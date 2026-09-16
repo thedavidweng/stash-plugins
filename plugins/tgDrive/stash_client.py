@@ -81,29 +81,28 @@ class StashClient:
                 headers["Cookie"] = f"session={cookie_val}"
         return headers
 
-    def execute(self, query: str, variables: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None) -> Dict[str, Any]:
-        payload = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
-        req = urllib.request.Request(
-            self.graphql_url,
-            data=payload,
-            headers=self._headers(),
-            method="POST",
-        )
-
+    def _post(self, body: bytes, headers: Dict[str, str], timeout: int) -> Dict[str, Any]:
+        """POST a GraphQL request and return the parsed JSON envelope."""
+        req = urllib.request.Request(self.graphql_url, data=body, headers=headers, method="POST")
         try:
-            with urllib.request.urlopen(req, timeout=timeout or self.timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return json.loads(resp.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             err_body = e.read().decode("utf-8", errors="ignore")
             raise RuntimeError(f"Stash GraphQL HTTP {e.code}: {err_body}") from e
         except Exception as e:
             raise RuntimeError(f"Stash GraphQL connection error: {e}") from e
 
-        if "errors" in data and data["errors"]:
+    def _parse_graphql(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Unwrap a GraphQL envelope, raising on transport-level errors."""
+        if data.get("errors"):
             msg = data["errors"][0].get("message", "Unknown GraphQL error")
             raise RuntimeError(f"Stash GraphQL error: {msg}")
-
         return data.get("data", {})
+
+    def execute(self, query: str, variables: Optional[Dict[str, Any]] = None, timeout: Optional[int] = None) -> Dict[str, Any]:
+        payload = json.dumps({"query": query, "variables": variables or {}}).encode("utf-8")
+        return self._parse_graphql(self._post(payload, self._headers(), timeout or self.timeout))
 
     # ---------------------------------------------------------------- scenes
 
@@ -313,19 +312,14 @@ class StashClient:
         crlf = b"\r\n"
         parts: List[bytes] = []
 
-        def add_value(content: bytes) -> None:
-            parts.append(content)
+        def add_field(name: str, value: bytes) -> None:
+            parts.append(f"--{boundary}".encode())
+            parts.append(f'Content-Disposition: form-data; name="{name}"'.encode())
+            parts.append(b"")
+            parts.append(value)
 
-        # operations field
-        parts.append(f"--{boundary}".encode())
-        parts.append(b'Content-Disposition: form-data; name="operations"')
-        parts.append(b"")
-        parts.append(json.dumps(operations).encode())
-        # map field
-        parts.append(f"--{boundary}".encode())
-        parts.append(b'Content-Disposition: form-data; name="map"')
-        parts.append(b"")
-        parts.append(json.dumps(files_map).encode())
+        add_field("operations", json.dumps(operations).encode())
+        add_field("map", json.dumps(files_map).encode())
         # file field
         parts.append(f"--{boundary}".encode())
         parts.append(
@@ -338,36 +332,14 @@ class StashClient:
         # closing boundary
         parts.append(f"--{boundary}--".encode())
 
-        body = crlf.join(parts)
-        headers = {
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "Accept": "application/json",
-        }
-        if self.api_key:
-            headers["ApiKey"] = self.api_key
-        if self.session_cookie:
-            if isinstance(self.session_cookie, dict):
-                cookie_val = self.session_cookie.get("Value", "")
-            else:
-                cookie_val = str(self.session_cookie)
-            if cookie_val:
-                headers["Cookie"] = f"session={cookie_val}"
+        headers = self._headers()
+        headers["Content-Type"] = f"multipart/form-data; boundary={boundary}"
 
-        req = urllib.request.Request(self.graphql_url, data=body, headers=headers, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout or self.long_timeout) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="ignore")
-            raise RuntimeError(f"Stash GraphQL HTTP {e.code}: {err_body}") from e
-        except Exception as e:
-            raise RuntimeError(f"Stash GraphQL connection error: {e}") from e
+        data = self._parse_graphql(
+            self._post(crlf.join(parts), headers, timeout or self.long_timeout)
+        )
 
-        if "errors" in data and data["errors"]:
-            msg = data["errors"][0].get("message", "Unknown GraphQL error")
-            raise RuntimeError(f"Stash GraphQL error: {msg}")
-
-        job_id = (data.get("data") or {}).get("importObjects")
+        job_id = data.get("importObjects")
         if not job_id:
             raise RuntimeError("Stash did not return an import job ID")
         return str(job_id)

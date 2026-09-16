@@ -1,7 +1,8 @@
 """User-facing setup and health reporting for the Stash task UI."""
 import os
-import shlex
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from td_client import TDClient
 
 
 SETUP_GUIDE_URL = (
@@ -17,60 +18,42 @@ def _check(status: str, message: str, hint: str = "") -> Dict[str, str]:
     return result
 
 
-def _td_command(td_path: str, data_dir: str, subcommand: str) -> str:
-    config = os.path.join(data_dir, "config.toml")
-    session = os.path.join(data_dir, "session.json")
-    database = os.path.join(data_dir, "local_cache.db")
-    return " ".join(
-        [
-            shlex.quote(td_path),
-            "--config",
-            shlex.quote(config),
-            "--session",
-            shlex.quote(session),
-            "--db",
-            shlex.quote(database),
-            subcommand,
-        ]
-    )
-
-
 def build_setup_report(
-    td_path: str,
-    data_dir: str,
+    td: TDClient,
     td_source: str = "not resolved",
+    error: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Return safe, copy-friendly setup information for the Stash UI."""
-    data_dir = os.path.abspath(os.path.expanduser(data_dir))
     report: Dict[str, Any] = {
         "status": "setup_required",
         "ready": False,
         "setup_guide": SETUP_GUIDE_URL,
-        "td": {"path": td_path, "source": td_source},
-        "data_directory": data_dir,
+        "td": {"path": td.td_path, "source": td_source},
+        "data_directory": td.data_dir,
         "message": (
             "Complete the one-time td setup in the Stash container terminal. "
             "Do not enter Telegram API hashes, login codes, or 2FA passwords "
             "in Stash plugin settings."
         ),
         "commands": {
-            "auth_setup": _td_command(td_path, data_dir, "auth setup"),
-            "auth_login": _td_command(td_path, data_dir, "auth login"),
-            "auth_status": _td_command(td_path, data_dir, "auth status"),
-            "init": _td_command(td_path, data_dir, "init <local-root> --create-channel"),
+            "auth_setup": td.command_line("auth", "setup"),
+            "auth_login": td.command_line("auth", "login"),
+            "auth_status": td.command_line("auth", "status"),
+            "init": td.command_line("init", "<local-root>", "--create-channel"),
         },
     }
+    if error:
+        report["td"]["error"] = error
     return report
 
 
-def run_health_check(td, td_path: str, td_source: str, data_dir: str) -> Dict[str, Any]:
+def run_health_check(td: TDClient, td_source: str) -> Dict[str, Any]:
     """Run non-interactive checks without ever requesting or printing secrets."""
-    data_dir = os.path.abspath(os.path.expanduser(data_dir))
     report: Dict[str, Any] = {
         "ready": False,
         "setup_guide": SETUP_GUIDE_URL,
-        "td": {"path": td_path, "source": td_source},
-        "data_directory": data_dir,
+        "td": {"path": td.td_path, "source": td_source},
+        "data_directory": td.data_dir,
         "checks": {},
     }
     checks = report["checks"]
@@ -89,7 +72,7 @@ def run_health_check(td, td_path: str, td_source: str, data_dir: str) -> Dict[st
         )
         return report
 
-    if os.path.isdir(data_dir) and os.access(data_dir, os.W_OK):
+    if td.data_dir and os.path.isdir(td.data_dir) and os.access(td.data_dir, os.W_OK):
         checks["data_directory"] = _check("pass", "data directory exists and is writable")
     else:
         checks["data_directory"] = _check(
@@ -112,8 +95,8 @@ def run_health_check(td, td_path: str, td_source: str, data_dir: str) -> Dict[st
         return report
 
     if not auth.get("authenticated"):
-        setup_cmd = _td_command(td_path, data_dir, "auth setup")
-        login_cmd = _td_command(td_path, data_dir, "auth login")
+        setup_cmd = td.command_line("auth", "setup")
+        login_cmd = td.command_line("auth", "login")
         checks["authentication"] = _check(
             "fail",
             "Telegram login is required",
@@ -155,9 +138,13 @@ def run_health_check(td, td_path: str, td_source: str, data_dir: str) -> Dict[st
             f"`td init`. Details: {exc}",
         )
 
-    report["ready"] = all(
-        item.get("status") == "pass"
-        for item in checks.values()
-        if item.get("status") != "warn"
-    ) and checks["data_directory"]["status"] == "pass"
+    # Readiness: binary, data directory, login and drive must pass; td doctor
+    # warnings are tolerated but doctor failures are not.
+    report["ready"] = (
+        checks["binary"]["status"] == "pass"
+        and checks["data_directory"]["status"] == "pass"
+        and checks["authentication"]["status"] == "pass"
+        and checks["telegram"]["status"] != "fail"
+        and checks["drive"]["status"] == "pass"
+    )
     return report

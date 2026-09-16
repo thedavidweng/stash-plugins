@@ -4,8 +4,12 @@ Plugin settings resolution and the remote backup layout contract.
 Settings configured in Stash (Settings -> Plugins) live in Stash's own config
 and are read back through GraphQL `configuration.plugins` (see stash_client).
 Precedence: CLI arguments > stdin payload > Stash plugin settings > defaults.
+
+load_settings always returns a dict containing every key in
+SETTINGS_DEFAULTS, with the type implied by its coercer (bool / float / int /
+stripped str). Consumers can trust the values without re-coercing.
 """
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 # Remote paths (fixed "latest snapshot" slots; each backup run replaces them).
 REMOTE_METADATA_EXPORT = "/stash-metadata/export.zip"
@@ -49,13 +53,17 @@ def _coerce_bool(value: Any, default: bool) -> bool:
     return default
 
 
-def _coerce_number(value: Any, default: float) -> float:
+def _coerce_float(value: Any, default: float) -> float:
     try:
         if value is None or value == "":
             return default
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _coerce_int(value: Any, default: int) -> int:
+    return int(_coerce_float(value, default))
 
 
 def _coerce_str(value: Any, default: str) -> str:
@@ -70,6 +78,26 @@ def _first_present(*sources: Optional[Dict[str, Any]], key: str) -> Any:
         if source and key in source and source[key] is not None:
             return source[key]
     return None
+
+
+# Setting key -> coercer. Defaults live in SETTINGS_DEFAULTS; adding a setting
+# is one entry here plus one default there.
+FIELD_COERCERS: Dict[str, Callable[[Any, Any], Any]] = {
+    "backup_scenes": _coerce_bool,
+    "backup_metadata": _coerce_bool,
+    "backup_database": _coerce_bool,
+    "backup_config": _coerce_bool,
+    "max_file_size_gb": _coerce_float,
+    "batch_size": _coerce_int,
+    "job_timeout_minutes": _coerce_int,
+    "server_timeout_seconds": _coerce_int,
+    "export_timeout_seconds": _coerce_int,
+    "td_binary_path": _coerce_str,
+    "td_data_dir": _coerce_str,
+    "td_version": _coerce_str,
+    "target_channel": _coerce_str,
+    "restore_dir": _coerce_str,
+}
 
 
 def load_settings(
@@ -91,62 +119,10 @@ def load_settings(
     if stash is not None and plugin_id:
         stash_settings = stash.get_plugin_settings(plugin_id) or {}
 
-    merged: Dict[str, Any] = {}
-
-    merged["backup_scenes"] = _coerce_bool(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="backup_scenes"),
-        SETTINGS_DEFAULTS["backup_scenes"],
-    )
-    merged["backup_metadata"] = _coerce_bool(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="backup_metadata"),
-        SETTINGS_DEFAULTS["backup_metadata"],
-    )
-    merged["backup_database"] = _coerce_bool(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="backup_database"),
-        SETTINGS_DEFAULTS["backup_database"],
-    )
-    merged["backup_config"] = _coerce_bool(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="backup_config"),
-        SETTINGS_DEFAULTS["backup_config"],
-    )
-    merged["max_file_size_gb"] = _coerce_number(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="max_file_size_gb"),
-        SETTINGS_DEFAULTS["max_file_size_gb"],
-    )
-    merged["batch_size"] = _coerce_number(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="batch_size"),
-        SETTINGS_DEFAULTS["batch_size"],
-    )
-    merged["job_timeout_minutes"] = _coerce_number(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="job_timeout_minutes"),
-        SETTINGS_DEFAULTS["job_timeout_minutes"],
-    )
-    merged["server_timeout_seconds"] = _coerce_number(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="server_timeout_seconds"),
-        SETTINGS_DEFAULTS["server_timeout_seconds"],
-    )
-    merged["export_timeout_seconds"] = _coerce_number(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="export_timeout_seconds"),
-        SETTINGS_DEFAULTS["export_timeout_seconds"],
-    )
-    merged["td_binary_path"] = _coerce_str(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="td_binary_path"),
-        "",
-    )
-    merged["td_data_dir"] = _coerce_str(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="td_data_dir"),
-        "",
-    )
-    merged["td_version"] = _coerce_str(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="td_version"),
-        SETTINGS_DEFAULTS["td_version"],
-    )
-    merged["target_channel"] = _coerce_str(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="target_channel"),
-        "",
-    )
-    merged["restore_dir"] = _coerce_str(
-        _first_present(cli_overrides, payload_settings, stash_settings, key="restore_dir"),
-        "",
-    )
-    return merged
+    return {
+        key: coerce(
+            _first_present(cli_overrides, payload_settings, stash_settings, key=key),
+            SETTINGS_DEFAULTS[key],
+        )
+        for key, coerce in FIELD_COERCERS.items()
+    }

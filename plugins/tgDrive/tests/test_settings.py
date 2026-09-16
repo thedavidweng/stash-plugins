@@ -81,10 +81,12 @@ class TestLoadSettings(unittest.TestCase):
             "backup_scenes": "false",
             "backup_config": "true",
             "batch_size": "25",
+            "job_timeout_minutes": "90",
         })
         self.assertFalse(settings["backup_scenes"])
         self.assertTrue(settings["backup_config"])
-        self.assertEqual(settings["batch_size"], 25.0)
+        self.assertEqual(settings["batch_size"], 25)
+        self.assertEqual(settings["job_timeout_minutes"], 90)
 
     def test_bad_values_fall_back(self):
         settings = load_settings(payload_settings={

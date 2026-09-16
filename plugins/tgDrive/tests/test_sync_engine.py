@@ -2,13 +2,14 @@ import os
 import sys
 import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ledger import Ledger
 from settings import REMOTE_CONFIG_BACKUP, REMOTE_DATABASE_BACKUP, REMOTE_METADATA_EXPORT
 from sync_engine import SyncEngine
+from td_client import TDRateLimitedError
 
 
 def base_settings(**overrides):
@@ -196,8 +197,118 @@ class TestSyncEngine(unittest.TestCase):
         report = engine.run_backup()
         self.assertEqual(report["scenes_published"], 2)
 
-    # ---------------------------------------------------------- artifacts
+    def test_fileless_scene_reported_not_silently_dropped(self):
+        def mock_find_scenes(page=1, per_page=40):
+            if page == 1:
+                return {
+                    "count": 2,
+                    "scenes": [
+                        {
+                            "id": "1",
+                            "title": "Real Scene",
+                            "files": [{"id": 101, "path": "/data/real.mp4", "size": 10}],
+                        },
+                        {"id": "2", "title": "Ghost Scene", "files": []},
+                    ],
+                }
+            return {"count": 2, "scenes": []}
 
+        self.mock_stash.find_scenes.side_effect = mock_find_scenes
+        self.mock_td.upload_file.return_value = {"message_id": 1, "hash": "h"}
+
+        engine = SyncEngine(
+            stash=self.mock_stash,
+            td=self.mock_td,
+            ledger=self.ledger,
+            settings=base_settings(),
+            dry_run=False,
+        )
+        report = engine.run_backup()
+
+        # the fileless scene lands in a bucket so coverage math stays honest
+        self.assertEqual(report["scenes_published"], 1)
+        self.assertEqual(report["scenes_skipped"], 1)
+        self.assertEqual(len(report["skipped_details"]), 1)
+        self.assertEqual(report["skipped_details"][0]["scene_id"], "2")
+        self.assertIn("no files", report["skipped_details"][0]["reason"])
+        self.assertEqual(report["coverage_objects_percent"], 50.0)
+
+    @patch("time.sleep")
+    def test_scene_upload_retries_on_rate_limit(self, mock_sleep):
+        """A per-send flood wait on a fresh session must not fail the scene."""
+        def mock_find_scenes(page=1, per_page=40):
+            if page == 1:
+                return {
+                    "count": 1,
+                    "scenes": [{
+                        "id": "7",
+                        "title": "Flooded",
+                        "files": [{"id": 71, "path": "/data/flooded.mp4", "size": 1024}],
+                    }],
+                }
+            return {"count": 1, "scenes": []}
+
+        self.mock_stash.find_scenes.side_effect = mock_find_scenes
+        self.mock_stash.download_image.return_value = False
+        self.mock_td.upload_file.side_effect = [
+            TDRateLimitedError("telegram rate limited this account: retry after 2s", 2),
+            {"message_id": 4242, "hash": "blake3:s"},
+        ]
+
+        engine = SyncEngine(
+            stash=self.mock_stash,
+            td=self.mock_td,
+            ledger=self.ledger,
+            settings=base_settings(backup_metadata=False, backup_database=False, backup_config=False),
+            dry_run=False,
+        )
+        report = engine.run_backup()
+
+        self.assertEqual(report["scenes_published"], 1)
+        self.assertEqual(report["scenes_failed"], 0)
+        self.assertEqual(self.mock_td.upload_file.call_count, 2)
+        self.assertEqual(mock_sleep.call_count, 1)
+        row = self.ledger.get("/data/flooded.mp4")
+        self.assertEqual(row["status"], "published")
+        self.assertEqual(row["message_id"], 4242)
+
+    @patch("time.sleep")
+    def test_scene_upload_fails_after_persistent_rate_limit(self, mock_sleep):
+        def mock_find_scenes(page=1, per_page=40):
+            if page == 1:
+                return {
+                    "count": 1,
+                    "scenes": [{
+                        "id": "8",
+                        "title": "Doomed",
+                        "files": [{"id": 81, "path": "/data/doomed.mp4", "size": 512}],
+                    }],
+                }
+            return {"count": 1, "scenes": []}
+
+        self.mock_stash.find_scenes.side_effect = mock_find_scenes
+        self.mock_stash.download_image.return_value = False
+        self.mock_td.upload_file.side_effect = TDRateLimitedError(
+            "telegram rate limited this account: retry after 2s", 2
+        )
+
+        engine = SyncEngine(
+            stash=self.mock_stash,
+            td=self.mock_td,
+            ledger=self.ledger,
+            settings=base_settings(backup_metadata=False, backup_database=False, backup_config=False),
+            dry_run=False,
+        )
+        report = engine.run_backup()
+
+        self.assertEqual(report["scenes_published"], 0)
+        self.assertEqual(report["scenes_failed"], 1)
+        self.assertEqual(self.mock_td.upload_file.call_count, 3)
+        row = self.ledger.get("/data/doomed.mp4")
+        self.assertEqual(row["status"], "failed")
+        self.assertIn("rate limited", row["reason"])
+
+    # ---------------------------------------------------------- artifacts
     def test_artifacts_backed_up_via_graphql(self):
         config_file = os.path.join(self.temp_dir, "config.yml")
         with open(config_file, "w") as f:
@@ -315,6 +426,58 @@ class TestSyncEngine(unittest.TestCase):
         report = engine.run_backup()
         self.assertEqual(report["artifacts"]["metadata_export"]["status"], "failed")
         self.assertIn("404", report["artifacts"]["metadata_export"]["error"])
+
+    @patch("time.sleep")
+    def test_artifact_upload_retries_on_rate_limit(self, mock_sleep):
+        """A short Telegram flood wait must not lose the artifact for the run."""
+        self.mock_stash.export_objects.return_value = "http://stash:9999/downloads/a/export.zip"
+        self.mock_stash.download_file.side_effect = self.fake_download
+        self.mock_td.upload_file.side_effect = [
+            TDRateLimitedError("telegram rate limited this account: retry after 2s", 2),
+            TDRateLimitedError("telegram rate limited this account: retry after 2s", 2),
+            {"message_id": 55, "hash": "blake3:ok"},
+        ]
+
+        engine = SyncEngine(
+            stash=self.mock_stash,
+            td=self.mock_td,
+            ledger=self.ledger,
+            settings=base_settings(backup_scenes=False, backup_database=False, backup_config=False),
+            dry_run=False,
+        )
+        report = engine.run_backup()
+
+        self.assertEqual(report["artifacts"]["metadata_export"]["status"], "ok")
+        self.assertEqual(self.mock_td.upload_file.call_count, 3)
+        self.assertEqual(mock_sleep.call_count, 2)
+        mock_sleep.assert_called_with(2)
+        row = self.ledger.get(REMOTE_METADATA_EXPORT)
+        self.assertEqual(row["status"], "published")
+
+    @patch("time.sleep")
+    def test_artifact_upload_fails_after_persistent_rate_limit(self, mock_sleep):
+        self.mock_stash.export_objects.return_value = "http://stash:9999/downloads/a/export.zip"
+        self.mock_stash.download_file.side_effect = self.fake_download
+        self.mock_td.upload_file.side_effect = TDRateLimitedError(
+            "telegram rate limited this account: retry after 2s", 2
+        )
+
+        engine = SyncEngine(
+            stash=self.mock_stash,
+            td=self.mock_td,
+            ledger=self.ledger,
+            settings=base_settings(backup_scenes=False, backup_database=False, backup_config=False),
+            dry_run=False,
+        )
+        report = engine.run_backup()
+
+        slot = report["artifacts"]["metadata_export"]
+        self.assertEqual(slot["status"], "failed")
+        self.assertIn("rate limited", slot["error"])
+        self.assertEqual(self.mock_td.upload_file.call_count, 3)
+        row = self.ledger.get(REMOTE_METADATA_EXPORT)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["status"], "failed")
 
 
 if __name__ == "__main__":

@@ -160,19 +160,6 @@ class TestRestoreEngine(unittest.TestCase):
         self.assertEqual(report["recovery_artifacts"]["database"]["status"], "failed")
         self.assertIn("boom", report["recovery_artifacts"]["database"]["error"])
 
-    def test_dry_run_touches_nothing(self):
-        engine = RestoreEngine(
-            stash=self.mock_stash,
-            td=self.mock_td,
-            restore_dir=self.restore_dir,
-            job_timeout_seconds=60,
-            dry_run=True,
-        )
-        report = engine.run_restore()
-        self.mock_td.scan.assert_not_called()
-        self.mock_td.download.assert_not_called()
-        self.assertTrue(report["dry_run"])
-
 
 if __name__ == "__main__":
     unittest.main()

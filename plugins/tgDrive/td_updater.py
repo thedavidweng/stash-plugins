@@ -15,7 +15,7 @@ from typing import Dict, Tuple
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from td_resolver import _extract_archive
+from td_resolver import extract_td_archive
 
 
 REPOSITORY = "thedavidweng/tg-drive-cli"
@@ -125,7 +125,7 @@ def install_td_core(plugin_dir: str, version: str = "latest") -> Dict[str, str]:
         with open(archive_path, "wb") as handle:
             handle.write(archive)
         extracted_dir = os.path.join(staging, "extracted")
-        extracted = _extract_archive(archive_path, extracted_dir)
+        extracted = extract_td_archive(archive_path, extracted_dir)
 
         target_dir = os.path.join(plugin_dir, "bin")
         os.makedirs(target_dir, exist_ok=True)

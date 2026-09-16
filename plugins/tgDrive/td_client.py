@@ -8,12 +8,16 @@ Contract notes (docs/contracts/cli-contract.md of tg-drive-cli):
   (`td cp` is upload-only; using it for downloads would upload instead)
 - `td get <dir> <dest> --recursive` places the remote directory's CONTENTS
   under dest (the remote dir name is not recreated)
+
+Binary discovery lives in td_resolver; this class only executes a path it is
+given. It also owns the canonical td invocation shape (session flags and
+ordering), which setup_check reuses for the copy-paste setup instructions.
 """
 import json
 import os
-import shutil
+import shlex
 import subprocess
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 
 class TDError(Exception):
@@ -42,40 +46,26 @@ class TDNotFoundError(TDError):
 class TDClient:
     def __init__(
         self,
-        td_path: Optional[str] = None,
-        config_path: Optional[str] = None,
-        channel: Optional[str] = None,
-        db_path: Optional[str] = None,
+        td_path: str,
         data_dir: Optional[str] = None,
+        channel: Optional[str] = None,
     ):
-        plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        executable = "td.exe" if os.name == "nt" else "td"
-        local_bundled = os.path.join(plugin_dir, executable)
-        local_plugin_binary = os.path.join(plugin_dir, "bin", executable)
-        if td_path:
-            self.td_path = td_path
-        elif os.path.exists(local_plugin_binary) and (
-            os.name == "nt"
-            or os.access(local_plugin_binary, os.X_OK)
-        ):
-            self.td_path = local_plugin_binary
-        elif os.path.exists(local_bundled) and os.access(local_bundled, os.X_OK):
-            self.td_path = local_bundled
-        else:
-            self.td_path = shutil.which("td") or "td"
-
+        self.td_path = td_path
         if data_dir:
-            data_dir = os.path.abspath(os.path.expanduser(data_dir))
-            self.config_path = config_path or os.path.join(data_dir, "config.toml")
-            self.session_path = os.path.join(data_dir, "session.json")
-            self.db_path = db_path or os.path.join(data_dir, "local_cache.db")
+            self.data_dir: Optional[str] = os.path.abspath(os.path.expanduser(data_dir))
+            self.config_path: Optional[str] = os.path.join(self.data_dir, "config.toml")
+            self.session_path: Optional[str] = os.path.join(self.data_dir, "session.json")
+            self.db_path: Optional[str] = os.path.join(self.data_dir, "local_cache.db")
         else:
-            self.config_path = config_path
+            self.data_dir = None
+            self.config_path = None
             self.session_path = None
-            self.db_path = db_path
+            self.db_path = None
         self.channel = channel
 
-    def _build_cmd(self, subcmd: str, args: List[str]) -> List[str]:
+    # ------------------------------------------------- command construction
+
+    def _base_cmd(self, subcmd: str, args: Sequence[str]) -> List[str]:
         cmd = [self.td_path, subcmd]
         if self.config_path:
             cmd.extend(["--config", self.config_path])
@@ -86,8 +76,16 @@ class TDClient:
         if self.db_path:
             cmd.extend(["--db", self.db_path])
         cmd.extend(args)
-        cmd.append("--json")
         return cmd
+
+    def _build_cmd(self, subcmd: str, args: List[str]) -> List[str]:
+        return self._base_cmd(subcmd, args) + ["--json"]
+
+    def command_line(self, subcmd: str, *args: str) -> str:
+        """Copy-pasteable shell form of a td invocation (without --json)."""
+        return " ".join(shlex.quote(part) for part in self._base_cmd(subcmd, args))
+
+    # ------------------------------------------------------------- td calls
 
     def version(self) -> Dict[str, Any]:
         """Return td version information."""
@@ -173,6 +171,13 @@ class TDClient:
             args.extend(["--thumb", thumb_path])
         if replace:
             args.extend(["--replace", "--confirm"])
+
+        # --wait makes td sleep through server FLOOD_WAITs and retry the
+        # send in-process (budget: rate_limit.max_wait_seconds, 300s by
+        # default) instead of failing fast. Uploads are the one call where
+        # waiting is always right: re-running the command loses td's
+        # in-memory pacing state and re-spawns the upload session.
+        args.append("--wait")
 
         cmd = self._build_cmd("cp", args)
         return self._exec(cmd)

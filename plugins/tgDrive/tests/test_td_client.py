@@ -56,6 +56,14 @@ class TestTDClient(unittest.TestCase):
         self.assertIn("--confirm", cmd)
 
     @patch("subprocess.run")
+    def test_upload_waits_through_flood_waits(self, mock_run):
+        """Uploads pass --wait so td retries FLOOD_WAITs in-process."""
+        mock_run.return_value = self._mock_run({"path": "/b", "message_id": 1})
+        self.client.upload_file("/a", "/b")
+        cmd = mock_run.call_args.args[0]
+        self.assertIn("--wait", cmd)
+
+    @patch("subprocess.run")
     def test_download_uses_get_not_cp(self, mock_run):
         """Regression: downloads must use `td get` (td cp is upload-only)."""
         mock_run.return_value = self._mock_run({"downloaded": 3, "skipped": 0, "failed": 0})
@@ -153,6 +161,30 @@ class TestTDClient(unittest.TestCase):
             "--session", "/td-data/session.json", "--db", "/td-data/local_cache.db",
         ])
         self.assertEqual(cmd[-1], "--json")
+
+    def test_command_line_matches_invocation_shape(self):
+        """User-facing instructions must equal the executed command (minus --json)."""
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = self._mock_run({"authenticated": False})
+            self.client.auth_status()
+            executed = mock_run.call_args.args[0]
+
+        displayed = self.client.command_line("auth", "status")
+        self.assertEqual(
+            displayed,
+            "/mock/td auth --config /td-data/config.toml "
+            "--session /td-data/session.json --db /td-data/local_cache.db status",
+        )
+        self.assertEqual(displayed.split() + ["--json"], executed)
+
+    def test_command_line_quotes_paths(self):
+        client = TDClient(td_path="/opt/my td", data_dir="/data dir/td-data")
+        self.assertEqual(
+            client.command_line("auth", "status"),
+            "'/opt/my td' auth --config '/data dir/td-data/config.toml' "
+            "--session '/data dir/td-data/session.json' "
+            "--db '/data dir/td-data/local_cache.db' status",
+        )
 
 
 if __name__ == "__main__":

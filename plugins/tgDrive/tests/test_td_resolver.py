@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
@@ -9,14 +10,34 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from td_resolver import resolve_td_path
 
+PLUGIN_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+
+def exec_capable_dir() -> str:
+    """A temp dir on a filesystem that allows exec.
+
+    Some hosts (Synology DSM) mount /tmp noexec, so os.access(X_OK) is
+    False there regardless of the mode bits; the resolver legitimately
+    refuses such binaries. Fall back to the plugin directory, which is the
+    same filesystem the real td binary runs from.
+    """
+    for base in (None, PLUGIN_DIR):
+        candidate = tempfile.mkdtemp(dir=base, prefix="td-resolver-test-")
+        probe = os.path.join(candidate, "probe")
+        with open(probe, "wb") as handle:
+            handle.write(b"")
+        os.chmod(probe, 0o755)
+        if os.access(probe, os.X_OK):
+            return candidate
+        shutil.rmtree(candidate, ignore_errors=True)
+    raise unittest.SkipTest("no exec-capable temp directory available")
+
 
 class TestTDResolver(unittest.TestCase):
     def setUp(self):
-        self.temp_dir = tempfile.mkdtemp()
+        self.temp_dir = exec_capable_dir()
 
     def tearDown(self):
-        import shutil
-
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_resolves_explicit_executable(self):

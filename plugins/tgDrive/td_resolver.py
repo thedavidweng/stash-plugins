@@ -59,7 +59,12 @@ def _archive_member_names(archive_path: str) -> Iterable[str]:
                 yield member.filename
 
 
-def _extract_archive(archive_path: str, runtime_dir: str) -> str:
+def extract_td_archive(archive_path: str, runtime_dir: str) -> str:
+    """Extract the td executable from a release archive into runtime_dir.
+
+    Returns the installed executable path. Rejects unsafe member paths and
+    symlink members; installs atomically (staged copy + os.replace).
+    """
     os.makedirs(runtime_dir, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="td-extract-", dir=runtime_dir) as staging:
         members = list(_archive_member_names(archive_path))
@@ -93,7 +98,6 @@ def _extract_archive(archive_path: str, runtime_dir: str) -> str:
                 mode = (info.external_attr >> 16) & 0o170000
                 if mode == stat.S_IFLNK:
                     raise ValueError("release archive contains a symbolic link")
-                _safe_member_path(staging, member)
                 os.makedirs(os.path.dirname(staged_path), exist_ok=True)
                 with bundle.open(info) as source, open(staged_path, "wb") as output:
                     shutil.copyfileobj(source, output)
@@ -123,7 +127,7 @@ def _resolve_configured(path: str, runtime_dir: str) -> TDResolution:
     if not os.path.isfile(candidate):
         raise ValueError(f"configured td path does not exist: {path}")
     if _is_archive(candidate):
-        return TDResolution(_extract_archive(candidate, runtime_dir), "configured release archive")
+        return TDResolution(extract_td_archive(candidate, runtime_dir), "configured release archive")
     if os.name != "nt" and not os.access(candidate, os.X_OK):
         try:
             os.chmod(candidate, os.stat(candidate).st_mode | stat.S_IXUSR)
@@ -164,7 +168,7 @@ def resolve_td_path(
     )
     if archive_names:
         archive = os.path.join(plugin_dir, archive_names[0])
-        return TDResolution(_extract_archive(archive, runtime_dir), "plugin directory archive")
+        return TDResolution(extract_td_archive(archive, runtime_dir), "plugin directory archive")
 
     found = shutil.which("td")
     if found:

@@ -39,13 +39,11 @@ class RestoreEngine:
         td: TDClient,
         restore_dir: str,
         job_timeout_seconds: int = 7200,
-        dry_run: bool = False,
     ):
         self.stash = stash
         self.td = td
         self.restore_dir = restore_dir
         self.job_timeout_seconds = max(int(job_timeout_seconds), 1)
-        self.dry_run = dry_run
 
     # ------------------------------------------------------------ artifacts
 
@@ -61,9 +59,7 @@ class RestoreEngine:
             slot["error"] = str(e)
         return slot
 
-    def _wait_for_job(self, label: str, job_id: Optional[str]) -> Dict[str, Any]:
-        if not job_id:
-            return {"status": "unknown"}
+    def _wait_for_job(self, label: str, job_id: str) -> Dict[str, Any]:
         log.LogInfo(f"Waiting for Stash {label} job {job_id} (timeout {self.job_timeout_seconds}s)...")
         status = self.stash.wait_for_job(job_id, self.job_timeout_seconds, progress=log.LogProgress)
         if status == "FINISHED":
@@ -80,7 +76,6 @@ class RestoreEngine:
         os.makedirs(self.restore_dir, exist_ok=True)
 
         report: Dict[str, Any] = {
-            "dry_run": self.dry_run,
             "scan_status": "skipped",
             "media": {"status": "skipped", "roots": []},
             "recovery_artifacts": {},
@@ -93,10 +88,6 @@ class RestoreEngine:
         try:
             # Step 1: Rebuild index from Telegram
             log.LogInfo("Step 1/5: Rebuilding td drive index from Telegram (td scan --full)...")
-            if self.dry_run:
-                log.LogInfo("[dry run] would rebuild the td index, download all media roots, scan and import metadata")
-                report["duration_seconds"] = 0
-                return report
             try:
                 scan_res = self.td.scan(full=True)
                 report["scan_status"] = f"active={scan_res.get('active', 0)}"
