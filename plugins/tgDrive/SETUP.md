@@ -35,6 +35,23 @@ runtime. `td` then reuses its local session file.
 
 Open **Settings -> Plugins -> TG Drive Backup**.
 
+### Scene Upload Mode
+
+Choose one mode before the first scene upload:
+
+- **`archive`** (default) sends each original file as a Telegram document.
+  Files remain byte-exact, retain their Stash library paths, and are included
+  in the Disaster Recovery restore.
+- **`browse`** sends image scenes as Telegram photos and other scenes as
+  streamable Telegram videos. Telegram may compress them. Each native caption
+  includes title, code, date, duration, resolution, and searchable
+  `#studio_*`, `#performer_*`, and `#tag_*` terms. Browse media is stored under
+  `/stash-browse`, separate from recovery media, and is intentionally excluded
+  from Disaster Recovery.
+
+Changing modes later publishes the selected representation separately. It does
+not delete media uploaded by the other mode.
+
 ### TD Core Path
 
 This is optional. It accepts:

@@ -16,6 +16,7 @@ mid-upload has already pushed the small high-value files):
 All Stash access is GraphQL. Telegram access is td (tg-drive-cli).
 """
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -24,6 +25,7 @@ from typing import Any, Callable, Dict, Optional
 from ledger import Ledger
 import log
 from settings import (
+    REMOTE_BROWSE_ROOT,
     REMOTE_CONFIG_BACKUP,
     REMOTE_DATABASE_BACKUP,
     REMOTE_METADATA_EXPORT,
@@ -39,6 +41,89 @@ ARTIFACT_UPLOAD_ATTEMPTS = 3
 # flood-waits fresh sessions for a few seconds per send; retrying with the
 # server-provided wait succeeds where moving on would just record a failure.
 SCENE_UPLOAD_ATTEMPTS = 3
+
+IMAGE_EXTENSIONS = {".bmp", ".gif", ".jpeg", ".jpg", ".png", ".webp"}
+CAPTION_COMPONENT_LIMIT = 80
+CAPTION_FILENAME_LIMIT = 700
+
+
+def _caption_text(value: Any, limit: int = CAPTION_COMPONENT_LIMIT) -> str:
+    """Make Stash text safe and compact for td's path-derived caption."""
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    text = text.replace("/", "∕").replace("\\", "∖")
+    return text[:limit].rstrip()
+
+
+def _hashtag(category: str, value: Any) -> str:
+    """Build a Telegram-searchable hashtag while retaining Unicode letters."""
+    text = re.sub(r"\W+", "_", _caption_text(value, 48), flags=re.UNICODE)
+    text = text.strip("_")
+    return f"#{category}_{text}" if text else ""
+
+
+def _format_duration(seconds: Any) -> str:
+    if seconds is None:
+        return ""
+    try:
+        total = max(int(float(seconds)), 0)
+    except (TypeError, ValueError):
+        return ""
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:d}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:d}:{seconds:02d}"
+
+
+def build_browse_remote_path(scene: Dict[str, Any], local_path: str, duration: Any, width: Any, height: Any) -> str:
+    """
+    Build the browse-only remote path.
+
+    td renders captions from a file's display name and parent path, but its
+    cp command deliberately has no arbitrary-caption option. Encoding this
+    bounded summary in the display name makes it readable and searchable in
+    native Telegram clients without changing original media.
+    """
+    scene_id = str(scene.get("id") or "unknown")
+    title = _caption_text(scene.get("title") or f"Scene {scene_id}", 240)
+    extension = os.path.splitext(os.path.basename(local_path))[1].lower() or ".media"
+
+    details = []
+    for value in (scene.get("code"), scene.get("date"), _format_duration(duration)):
+        text = _caption_text(value)
+        if text:
+            details.append(text)
+    if width and height:
+        details.append(f"{width}x{height}")
+
+    hashtags = []
+    studio = (scene.get("studio") or {}).get("name")
+    if studio:
+        hashtags.append(_hashtag("studio", studio))
+    hashtags.extend(
+        _hashtag("performer", performer.get("name"))
+        for performer in scene.get("performers") or []
+        if performer.get("name")
+    )
+    hashtags.extend(
+        _hashtag("tag", tag.get("name"))
+        for tag in scene.get("tags") or []
+        if tag.get("name")
+    )
+
+    parts = [title]
+    if details:
+        parts.append(" · ".join(details))
+    if hashtags:
+        parts.append(" ".join(tag for tag in hashtags if tag))
+    display_name = " | ".join(parts)
+    display_name = display_name[:CAPTION_FILENAME_LIMIT - len(extension)].rstrip(" .|") + extension
+    return f"{REMOTE_BROWSE_ROOT}/{scene_id}/{display_name}"
+
+
+def scene_presentation(local_path: str, upload_mode: str) -> str:
+    """Choose the td presentation type for the configured scene upload mode."""
+    if upload_mode == "archive":
+        return "document"
+    return "photo" if os.path.splitext(local_path)[1].lower() in IMAGE_EXTENSIONS else "video"
 
 
 class SyncEngine:
@@ -215,6 +300,11 @@ class SyncEngine:
                 duration = main_file.get("duration")
                 width = main_file.get("width")
                 height = main_file.get("height")
+                upload_mode = self.settings.get("scene_upload_mode", "archive")
+                # Modes deliberately use distinct records. Switching modes
+                # must publish the other representation rather than being
+                # skipped due to the archive representation's ledger entry.
+                ledger_path = local_path if upload_mode == "archive" else f"browse:{local_path}"
 
                 report["bytes_total"] += size
 
@@ -223,7 +313,7 @@ class SyncEngine:
                     limit_gb = self.max_file_size_bytes / (1024 ** 3)
                     size_gb = size / (1024 ** 3)
                     reason = f"Oversized file ({size_gb:.2f} GB exceeds platform limit {limit_gb:.2f} GB)"
-                    self.ledger.record_skip(local_path, "scene", size, reason, file_id)
+                    self.ledger.record_skip(ledger_path, f"scene:{upload_mode}", size, reason, file_id)
                     report["scenes_skipped"] += 1
                     report["bytes_skipped"] += size
                     report["skipped_details"].append({
@@ -236,8 +326,8 @@ class SyncEngine:
                     log.LogWarning(f"Skipping oversized scene {scene_id}: {reason}")
                     continue
 
-                # Check 2: Already published in ledger and content unchanged
-                existing = self.ledger.get(local_path)
+                # Check 2: Already published in this mode
+                existing = self.ledger.get(ledger_path)
                 if existing and existing.get("status") == "published":
                     report["scenes_published"] += 1
                     report["bytes_published"] += size
@@ -258,10 +348,14 @@ class SyncEngine:
                     if self.stash.download_image(cover_rel, t_dest):
                         thumb_path = t_dest
 
-                # Remote path mirrors local library path for verbatim restoration
-                remote_path = local_path if local_path.startswith("/") else f"/{local_path}"
+                if upload_mode == "archive":
+                    # Archive paths mirror the library for Disaster Recovery.
+                    remote_path = local_path if local_path.startswith("/") else f"/{local_path}"
+                else:
+                    remote_path = build_browse_remote_path(s, local_path, duration, width, height)
+                as_kind = scene_presentation(local_path, upload_mode)
 
-                log.LogInfo(f"Uploading scene {scene_id}: {title}")
+                log.LogInfo(f"Uploading scene {scene_id} as {upload_mode}: {title}")
                 published = False
                 error: Optional[str] = None
                 for attempt in range(1, SCENE_UPLOAD_ATTEMPTS + 1):
@@ -269,19 +363,19 @@ class SyncEngine:
                         res = self.td.upload_file(
                             local_path=local_path,
                             remote_path=remote_path,
-                            as_kind="video",
-                            duration=duration,
-                            width=width,
-                            height=height,
-                            streaming=True,
-                            thumb_path=thumb_path,
+                            as_kind=as_kind,
+                            duration=duration if as_kind == "video" else None,
+                            width=width if as_kind == "video" else None,
+                            height=height if as_kind == "video" else None,
+                            streaming=as_kind == "video",
+                            thumb_path=thumb_path if as_kind != "photo" else None,
                         )
 
                         msg_id = res.get("message_id")
                         blake3 = res.get("hash")
                         self.ledger.record_success(
-                            canonical_path=local_path,
-                            kind="scene",
+                            canonical_path=ledger_path,
+                            kind=f"scene:{upload_mode}",
                             size=size,
                             file_id=file_id,
                             blake3=blake3,
@@ -311,7 +405,7 @@ class SyncEngine:
                         break
 
                 if not published:
-                    self.ledger.record_failure(local_path, "scene", size, error, file_id)
+                    self.ledger.record_failure(ledger_path, f"scene:{upload_mode}", size, error, file_id)
                     report["scenes_failed"] += 1
                     report["failed_details"].append({"scene_id": scene_id, "error": error})
 

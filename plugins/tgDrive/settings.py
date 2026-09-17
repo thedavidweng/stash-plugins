@@ -17,15 +17,17 @@ REMOTE_DATABASE_BACKUP = "/stash-backup/database/stash-backup.zip"
 REMOTE_CONFIG_BACKUP = "/stash-backup/config/config.yml"
 
 # Top-level remote directories owned by this plugin. Restore skips them when
-# rebuilding the media tree so export/backup archives never leak into the
-# Stash library (Stash would index .zip files as galleries).
-SERVICE_ROOTS = ("stash-metadata", "stash-backup")
+# rebuilding the archival media tree so archives and Telegram-compressed
+# browse copies never leak into the Stash library.
+SERVICE_ROOTS = ("stash-metadata", "stash-backup", "stash-browse")
+REMOTE_BROWSE_ROOT = "/stash-browse"
 
 SETTINGS_DEFAULTS: Dict[str, Any] = {
     "backup_scenes": True,
     "backup_metadata": True,
     "backup_database": True,
     "backup_config": False,
+    "scene_upload_mode": "archive",
     "max_file_size_gb": 2.0,
     "batch_size": 50,
     "job_timeout_minutes": 120,
@@ -73,6 +75,11 @@ def _coerce_str(value: Any, default: str) -> str:
     return text if text else default
 
 
+def _coerce_scene_upload_mode(value: Any, default: str) -> str:
+    mode = _coerce_str(value, default).lower()
+    return mode if mode in ("archive", "browse") else default
+
+
 def _first_present(*sources: Optional[Dict[str, Any]], key: str) -> Any:
     for source in sources:
         if source and key in source and source[key] is not None:
@@ -87,6 +94,7 @@ FIELD_COERCERS: Dict[str, Callable[[Any, Any], Any]] = {
     "backup_metadata": _coerce_bool,
     "backup_database": _coerce_bool,
     "backup_config": _coerce_bool,
+    "scene_upload_mode": _coerce_scene_upload_mode,
     "max_file_size_gb": _coerce_float,
     "batch_size": _coerce_int,
     "job_timeout_minutes": _coerce_int,

@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ledger import Ledger
 from settings import REMOTE_CONFIG_BACKUP, REMOTE_DATABASE_BACKUP, REMOTE_METADATA_EXPORT
-from sync_engine import SyncEngine
+from sync_engine import SyncEngine, build_browse_remote_path, scene_presentation
 from td_client import TDRateLimitedError
 
 
@@ -118,6 +118,7 @@ class TestSyncEngine(unittest.TestCase):
         self.assertIsNotNone(pub_row)
         self.assertEqual(pub_row["status"], "published")
         self.assertEqual(pub_row["message_id"], 1234)
+        self.assertEqual(self.mock_td.upload_file.call_args.kwargs["as_kind"], "document")
 
     def test_dry_run_mode_touches_nothing(self):
         def mock_find_scenes(page=1, per_page=40):
@@ -170,6 +171,71 @@ class TestSyncEngine(unittest.TestCase):
         report = engine.run_backup()
         self.mock_stash.find_scenes.assert_not_called()
         self.assertEqual(report["scenes_total"], 0)
+
+    def test_browse_path_contains_scene_metadata_and_hashtags(self):
+        path = build_browse_remote_path(
+            {
+                "id": "42",
+                "title": "Example / Scene",
+                "code": "ABC-123",
+                "date": "2025-02-03",
+                "studio": {"name": "Example Studio"},
+                "performers": [{"name": "Jane Doe"}],
+                "tags": [{"name": "Tag One"}, {"name": "中文 标签"}],
+            },
+            "/data/example.mp4",
+            duration=3723,
+            width=1920,
+            height=1080,
+        )
+        self.assertTrue(path.startswith("/stash-browse/42/"))
+        self.assertIn("Example ∕ Scene", path)
+        self.assertIn("ABC-123 · 2025-02-03 · 1:02:03 · 1920x1080", path)
+        self.assertIn("#studio_Example_Studio", path)
+        self.assertIn("#performer_Jane_Doe", path)
+        self.assertIn("#tag_中文_标签", path)
+        self.assertTrue(path.endswith(".mp4"))
+
+    def test_browse_mode_uploads_streamable_video_with_caption_path(self):
+        self.mock_stash.find_scenes.return_value = {
+            "count": 1,
+            "scenes": [{
+                "id": "9",
+                "title": "Browse Me",
+                "studio": {"name": "Studio"},
+                "performers": [{"name": "Performer"}],
+                "tags": [{"name": "Tag"}],
+                "files": [{
+                    "id": 91, "path": "/data/browse.mp4", "size": 1024,
+                    "duration": 90, "width": 1280, "height": 720,
+                }],
+            }],
+        }
+        self.mock_td.upload_file.return_value = {"message_id": 9, "hash": "h"}
+        engine = SyncEngine(
+            stash=self.mock_stash,
+            td=self.mock_td,
+            ledger=self.ledger,
+            settings=base_settings(
+                backup_metadata=False, backup_database=False, backup_config=False,
+                scene_upload_mode="browse",
+            ),
+        )
+
+        report = engine.run_backup()
+
+        self.assertEqual(report["scenes_published"], 1)
+        call = self.mock_td.upload_file.call_args.kwargs
+        self.assertEqual(call["as_kind"], "video")
+        self.assertTrue(call["streaming"])
+        self.assertTrue(call["remote_path"].startswith("/stash-browse/9/"))
+        self.assertIn("#performer_Performer", call["remote_path"])
+        self.assertEqual(self.ledger.get("browse:/data/browse.mp4")["kind"], "scene:browse")
+
+    def test_browse_mode_uploads_images_as_photos(self):
+        self.assertEqual(scene_presentation("/data/cover.JPG", "browse"), "photo")
+        self.assertEqual(scene_presentation("/data/clip.mp4", "browse"), "video")
+        self.assertEqual(scene_presentation("/data/clip.mp4", "archive"), "document")
 
     def test_batch_size_from_settings(self):
         def mock_find_scenes(page=1, per_page=40):

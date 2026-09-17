@@ -48,7 +48,7 @@ Each item is a setting you can toggle in **Settings** $\rightarrow$ **Plugins** 
 
 | Item | Default | Remote path | How it is produced |
 | :--- | :--- | :--- | :--- |
-| Scene media (`backup_scenes`) | on | mirrors local library paths | `findScenes` via GraphQL, then byte-exact `td cp --as video` uploads (native video presentation: duration, dimensions, streaming hint, generated cover thumbnail) |
+| Scene media (`backup_scenes`) | on | mode-dependent | `findScenes` via GraphQL, then `td cp` in the selected archive or browse mode (below) |
 | Metadata export (`backup_metadata`) | on | `/stash-metadata/export.zip` | Stash native `exportObjects`: all scenes (with markers, ratings, performer/tag/studio/group associations, fingerprints via files), performers, studios, tags, groups, with dependencies |
 | Database snapshot (`backup_database`) | on | `/stash-backup/database/stash-backup.zip` | Stash native `backupDatabase` (consistent SQLite snapshot made by Stash itself; blobs included on Stash >= 0.31) |
 | `config.yml` (`backup_config`) | **off** | `/stash-backup/config/config.yml` | the raw config file, located via GraphQL `configuration.general.configFilePath`. **Contains credentials (API keys, stash-box tokens) - only enable on a private channel you control.** |
@@ -65,6 +65,7 @@ The export zip and database snapshot are guarded by the same Telegram size ceili
 | `backup_metadata` | Boolean | true | Export and upload the native metadata zip. |
 | `backup_database` | Boolean | true | Snapshot and upload the database. |
 | `backup_config` | Boolean | false | Upload `config.yml` (contains credentials). |
+| `scene_upload_mode` | String | `archive` | `archive` uploads byte-exact files as Telegram documents and supports Disaster Recovery. `browse` uploads images as Telegram photos and other scene media as streamable Telegram videos under `/stash-browse`, with readable metadata and searchable hashtags in each caption. |
 | `max_file_size_gb` | Number | 2.0 | Telegram per-file ceiling (2.0 standard, 4.0 Premium). Larger files are skipped and reported. |
 | `batch_size` | Number | 50 | Max scenes per backup run (0 = all). |
 | `job_timeout_minutes` | Number | 120 | How long the restore task waits for Stash scan/import jobs. |
@@ -95,7 +96,7 @@ Settings are stored in Stash's own configuration and are read back through Graph
 The **Disaster Recovery Restore** task automates the non-destructive parts:
 
 1. **Rebuild index**: `td scan --full` walks the Telegram channel and discussion threads to reconstruct the catalog and hashes.
-2. **Download media**: every remote media root is downloaded into `restore_dir` (the plugin's own `/stash-metadata` and `/stash-backup` directories are excluded, so archives never leak into the Stash library).
+2. **Download media**: every archive-mode media root is downloaded into `restore_dir` (the plugin's `/stash-metadata`, `/stash-backup`, and browse-only `/stash-browse` directories are excluded).
 3. **Recovery artifacts**: the database snapshot and `config.yml` are placed under `<restore_dir>/stash-recovery/` for **manual** application. Replacing the live database or config of a running Stash is destructive and is never done automatically.
 4. **Scan**: the restored media roots are scanned via GraphQL `metadataScan` (the plugin waits for the job, up to `job_timeout_minutes`).
 5. **Import metadata**: the metadata export zip is imported via GraphQL `importObjects` (`duplicateBehaviour: OVERWRITE`, `missingRefBehaviour: CREATE`), restoring scene metadata, markers, ratings and associations. Media bytes are untouched - file hashes (`oshash`, `pHash`, MD5) match automatically.
@@ -116,9 +117,10 @@ The plugin detects the server version via GraphQL and degrades gracefully.
 
 - **GraphQL-first**: everything that can go through the GraphQL API does. The only direct file access is (a) uploading the artifacts `td` needs on disk and (b) reading the raw `config.yml` for the opt-in config backup, because Stash exposes its parsed configuration but not the file bytes.
 - **Rate limiting is absorbed, not fatal**: uploads run `td cp --wait`, so Telegram `FLOOD_WAIT` responses are slept through inside `td` (up to `rate_limit.max_wait_seconds`, 300 s by default) instead of failing the run. If a wait still exceeds that budget, the plugin retries each upload a bounded number of times (3), then records the item as `failed` in the ledger and moves on; the next run picks it up. Fresh Telegram sessions are rate-limited more aggressively - the first backup after `td auth login` may be slow, and that is expected.
+- **Two scene-upload modes**: `archive` is the default and uploads the original bytes as Telegram documents, mirroring library paths for recovery. `browse` sends images as photos and other scenes as streamable videos. Its media names encode the title, code, date, duration, resolution, studio, performers, and tags; `td` renders that name as Telegram's readable caption, so the `#studio_*`, `#performer_*`, and `#tag_*` terms work in Telegram search. Browse uploads are deliberately stored under `/stash-browse` and excluded from Disaster Recovery because Telegram compression changes their bytes and their browse paths are not the Stash media tree.
 - **Captions are generated by `td`**, from the file's display name, parent directory and directory-derived hashtags (`td` caption model). They are presentation only; machine reconstruction uses `td-manifest:v1` / `td-album:v1` records, never captions or hashtags.
 - **No chunking**: files above the Telegram ceiling are skipped and audited, never split (see the trade-offs below).
-- **Media are byte-exact**: restored files match their original hashes with no reassembly.
+- **Archive media are byte-exact**: restored files match their original hashes with no reassembly. Browse media trade byte identity for Telegram-native previews.
 
 ### Why oversized files are skipped, not split
 

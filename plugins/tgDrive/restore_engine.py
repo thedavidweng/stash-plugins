@@ -3,9 +3,9 @@ Disaster recovery and restore engine.
 
 Steps:
 1. Rebuild the td index from Telegram (td scan --full).
-2. List the remote tree root; download every media root into the restore
-   directory (service directories /stash-metadata and /stash-backup are
-   excluded so export/backup archives never enter the Stash library).
+2. List the remote tree root; download every archival media root into the
+   restore directory (service directories and the browse-only projection are
+   excluded so they never enter the Stash library).
 3. Pull the database backup and config backup into
    <restore_dir>/stash-recovery/ for manual application (replacing the live
    database or config of a running Stash is destructive and is NOT done

@@ -21,6 +21,7 @@ class TestLoadSettings(unittest.TestCase):
         self.assertTrue(settings["backup_metadata"])
         self.assertTrue(settings["backup_database"])
         self.assertFalse(settings["backup_config"])
+        self.assertEqual(settings["scene_upload_mode"], "archive")
         self.assertEqual(settings["max_file_size_gb"], 2.0)
         self.assertEqual(settings["batch_size"], 50)
         self.assertEqual(settings["td_data_dir"], "")
@@ -92,9 +93,15 @@ class TestLoadSettings(unittest.TestCase):
         settings = load_settings(payload_settings={
             "max_file_size_gb": "not-a-number",
             "batch_size": None,
+            "scene_upload_mode": "invalid",
         })
         self.assertEqual(settings["max_file_size_gb"], 2.0)
         self.assertEqual(settings["batch_size"], 50)
+        self.assertEqual(settings["scene_upload_mode"], "archive")
+
+    def test_scene_upload_mode_is_normalized(self):
+        settings = load_settings(payload_settings={"scene_upload_mode": "BROWSE"})
+        self.assertEqual(settings["scene_upload_mode"], "browse")
 
 
 if __name__ == "__main__":

@@ -22,7 +22,7 @@ tasks:
     defaultArgs:
       mode: install_core
   - name: Backup to Telegram
-    description: 'Incrementally uploads scene media (byte-exact, native video presentation) and, per settings, a native Stash metadata export, a database snapshot, and config.yml - all produced through Stash''s GraphQL API. If setup is incomplete, run TD Drive Health Check and follow the English guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
+    description: 'Incrementally uploads scene media in the selected archive or Telegram-browse mode and, per settings, a native Stash metadata export, a database snapshot, and config.yml - all produced through Stash''s GraphQL API. If setup is incomplete, run TD Drive Health Check and follow the English guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
     defaultArgs:
       mode: backup
   - name: Dry Run Preview
@@ -55,6 +55,10 @@ settings:
     displayName: Backup config.yml
     description: Upload Stash's raw config.yml to /stash-backup/config/config.yml. WARNING - config.yml contains credentials (API keys, stash-box tokens). Only enable on a private channel you control. Default false.
     type: BOOLEAN
+  scene_upload_mode:
+    displayName: Scene Upload Mode
+    description: 'archive uploads byte-exact files as Telegram documents and supports Disaster Recovery. browse uploads images as photos and other scenes as streamable videos under /stash-browse; Telegram compresses media and captions contain title, code/date/duration/resolution, #studio, #performer, and #tag search terms. Default archive.'
+    type: STRING
   max_file_size_gb:
     displayName: Max File Size (GB)
     description: Telegram ceiling per file (2.0 standard, 4.0 Premium). Scene files and database snapshots above this are skipped and reported. Default 2.0.

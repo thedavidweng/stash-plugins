@@ -16,6 +16,7 @@ def remote_entries():
         {"name": "loose.mp4", "path": "/loose.mp4", "type": "file"},
         {"name": "stash-metadata", "path": "/stash-metadata", "type": "dir"},
         {"name": "stash-backup", "path": "/stash-backup", "type": "dir"},
+        {"name": "stash-browse", "path": "/stash-browse", "type": "dir"},
     ]
 
 
@@ -74,6 +75,7 @@ class TestRestoreEngine(unittest.TestCase):
         for c in download_calls:
             self.assertNotEqual(c.args[0], "/stash-metadata")
             self.assertNotEqual(c.args[0], "/stash-backup")
+            self.assertNotEqual(c.args[0], "/stash-browse")
 
         # dir roots recurse into a local mirror of the remote name
         dir_call = [c for c in download_calls if c.args[0] == "/volume1"][0]
