@@ -1,10 +1,13 @@
 import os
 import sys
+import tempfile
 import unittest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from tg_drive import TD_REQUIRED_MODES, get_plugin_id, get_td_data_dir, parse_args
+from ledger import Ledger
+from tg_drive import TD_REQUIRED_MODES, TaskContext, _ledger, get_plugin_id, get_td_data_dir, parse_args
 
 
 class TestHelpers(unittest.TestCase):
@@ -35,6 +38,20 @@ class TestHelpers(unittest.TestCase):
         # TD-required modes must exist as handlers, or they could never run.
         from tg_drive import HANDLERS
         self.assertTrue(set(TD_REQUIRED_MODES) <= set(HANDLERS))
+
+    @patch("tg_drive.get_plugin_dir")
+    def test_ledger_migrates_to_persistent_data_directory(self, mock_plugin_dir):
+        with tempfile.TemporaryDirectory() as plugin_dir, tempfile.TemporaryDirectory() as data_dir:
+            mock_plugin_dir.return_value = plugin_dir
+            legacy = os.path.join(plugin_dir, "ledger.sqlite")
+            Ledger(legacy).record_success("/scene.mp4", "scene:archive", 10)
+            ctx = MagicMock(spec=TaskContext)
+            ctx.data_dir = data_dir
+
+            migrated = _ledger(ctx)
+
+            self.assertEqual(migrated.get("/scene.mp4")["status"], "published")
+            self.assertTrue(os.path.exists(os.path.join(data_dir, "ledger.sqlite")))
 
 
 if __name__ == "__main__":

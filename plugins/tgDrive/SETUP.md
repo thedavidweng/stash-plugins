@@ -90,6 +90,7 @@ Set this to a persistent directory. The plugin passes these paths to `td`:
 <data-directory>/config.toml
 <data-directory>/session.json
 <data-directory>/local_cache.db
+<data-directory>/ledger.sqlite
 ```
 
 If it is empty, the plugin uses its excluded `td-data/` directory. This is

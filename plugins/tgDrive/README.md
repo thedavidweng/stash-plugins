@@ -135,6 +135,6 @@ Instead, oversized files are a first-class workflow: the pre-flight gatekeeper r
 ## Limitations
 
 - **Images and galleries are not backed up.** Only scene video files are uploaded; the metadata export therefore excludes image/gallery objects (their media would be missing on restore anyway).
-- The plugin's own `ledger.sqlite` is a local cache only; it is rebuilt from the remote index by `td scan` and is never uploaded.
+- The plugin's own `ledger.sqlite` lives in the persistent TD Data Directory alongside td's local cache. Legacy plugin-local ledgers are migrated automatically. It is never uploaded.
 - The plugin does not perform interactive Telegram login from a Stash task. The one-time `td auth setup`, `td auth login`, and `td init` steps must run in a terminal attached to the Stash runtime.
 - Backup runs replace the remote artifact slots; only the latest metadata/database/config snapshot is kept on the remote.

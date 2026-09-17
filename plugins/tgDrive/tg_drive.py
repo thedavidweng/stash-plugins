@@ -16,6 +16,7 @@ resolution) and prints the result once.
 import argparse
 import json
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
@@ -134,9 +135,15 @@ def _build_context(mode: str, stash: StashClient, settings: Dict[str, Any]) -> T
     )
 
 
-def _ledger() -> Ledger:
-    """The local sync index; created on demand by the tasks that use it."""
-    return Ledger(os.path.join(get_plugin_dir(), "ledger.sqlite"))
+def _ledger(ctx: TaskContext) -> Ledger:
+    """Open the persistent sync index, migrating the legacy plugin-local file."""
+    os.makedirs(ctx.data_dir, exist_ok=True)
+    target = os.path.join(ctx.data_dir, "ledger.sqlite")
+    legacy = os.path.join(get_plugin_dir(), "ledger.sqlite")
+    if not os.path.exists(target) and os.path.exists(legacy) and legacy != target:
+        shutil.copy2(legacy, target)
+        log.LogInfo(f"Migrated the sync ledger to persistent TD data directory: {target}")
+    return Ledger(target)
 
 
 def _setup_error(message: str) -> Dict[str, Any]:
@@ -208,7 +215,7 @@ def run_backup(ctx: TaskContext) -> Dict[str, Any]:
     engine = SyncEngine(
         stash=ctx.stash,
         td=ctx.td,
-        ledger=_ledger(),
+        ledger=_ledger(ctx),
         settings=ctx.settings,
         dry_run=ctx.dry_run,
     )
@@ -217,7 +224,7 @@ def run_backup(ctx: TaskContext) -> Dict[str, Any]:
 
 def run_verify(ctx: TaskContext) -> Dict[str, Any]:
     log.LogInfo("Running ledger and hash verification...")
-    summary = _ledger().get_summary()
+    summary = _ledger(ctx).get_summary()
     log.LogInfo(f"Verification complete: {summary}")
     return {"status": "ok", "ledger_summary": summary}
 
