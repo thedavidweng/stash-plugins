@@ -36,3 +36,5 @@ jobs:
         uses: Factory-AI/droid-action@main
         with:
           factory_api_key: ${{ secrets.FACTORY_API_KEY }}
+          # Allow bot actors that legitimately re-fire pull_request events.
+          allowed_bots: coderabbitai
