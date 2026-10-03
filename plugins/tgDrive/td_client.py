@@ -1,8 +1,8 @@
 """
-Client wrapper for tg-drive-cli (td) binary.
+Client wrapper for tg-drive (td) binary.
 Communicates via stdin/stdout JSON contract and maps exit codes/errors to Python exceptions.
 
-Contract notes (docs/contracts/cli-contract.md of tg-drive-cli):
+Contract notes (docs/contracts/cli-contract.md of tg-drive):
 - uploads use `td cp <local> <remote-path> [--replace --confirm ...]`
 - downloads use `td get <remote-path> <local-dest> [--recursive]`
   (`td cp` is upload-only; using it for downloads would upload instead)

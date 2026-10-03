@@ -1,6 +1,6 @@
 # TG Drive Setup Guide
 
-This guide configures the TG Drive Backup plugin and `tg-drive-cli` (`td`).
+This guide configures the TG Drive Backup plugin and `tg-drive` (`td`).
 It is written for the environment where Stash runs. For Docker, that means
 the **container**, not the NAS or host operating system.
 
@@ -69,7 +69,7 @@ If it is empty, the plugin checks, in order:
 4. `td` in `PATH`
 
 The **Install / Update TD Core** task downloads the matching OS/architecture
-asset from the `tg-drive-cli` GitHub Release, verifies its SHA-256 value from
+asset from the `tg-drive` GitHub Release, verifies its SHA-256 value from
 that release's `checksums.txt`, and installs it into `bin/`. It runs only when
 you explicitly select the task. It does not silently update `td` during a
 backup. Set **TD Core Version** to `latest` or to a release tag such as
@@ -272,7 +272,7 @@ case "$(uname -m)" in
 esac
 
 VERSION=v1.2.3                 # choose a real td release tag
-BASE_URL="https://github.com/thedavidweng/tg-drive-cli/releases/download/$VERSION"
+BASE_URL="https://github.com/thedavidweng/tg-drive/releases/download/$VERSION"
 mkdir -p "$PLUGIN_DIR/bin"
 cd /tmp
 
@@ -345,7 +345,7 @@ so the plugin finds it through `PATH`.
 Keep the TD data directory persistent, for example:
 
 ```sh
-TD_DATA=/var/lib/tg-drive-cli
+TD_DATA=/var/lib/tg-drive
 sudo install -d -m 700 "$TD_DATA"
 ```
 

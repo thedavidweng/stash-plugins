@@ -13,7 +13,7 @@ mid-upload has already pushed the small high-value files):
    /stash-backup/config/config.yml
 4. scene videos: byte-exact uploads mirroring local library paths
 
-All Stash access is GraphQL. Telegram access is td (tg-drive-cli).
+All Stash access is GraphQL. Telegram access is td (tg-drive).
 """
 import os
 import re

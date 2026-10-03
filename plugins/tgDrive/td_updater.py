@@ -18,7 +18,7 @@ from urllib.request import Request, urlopen
 from td_resolver import extract_td_archive
 
 
-REPOSITORY = "thedavidweng/tg-drive-cli"
+REPOSITORY = "thedavidweng/tg-drive"
 RELEASES_URL = f"https://api.github.com/repos/{REPOSITORY}/releases"
 
 

@@ -1,5 +1,5 @@
 name: TG Drive Backup
-description: Configurable, metadata-preserving backup and disaster recovery between Stash and Telegram channels via tg-drive-cli. All Stash access goes through the GraphQL API.
+description: Configurable, metadata-preserving backup and disaster recovery between Stash and Telegram channels via tg-drive. All Stash access goes through the GraphQL API.
 version: 0.3.0
 url: https://github.com/thedavidweng/stash-plugins
 
@@ -80,7 +80,7 @@ settings:
     description: HTTP timeout for synchronous GraphQL export/backup calls (exportObjects, backupDatabase). Default 1800.
     type: NUMBER
   td_binary_path:
-    displayName: tg-drive-cli Binary Path
+    displayName: tg-drive Binary Path
     description: Optional container-visible path to a td executable or release archive (.tar.gz, .tgz, or .zip). Leave empty to use the plugin bin directory or PATH. Do not enter Telegram credentials here.
     type: STRING
   td_data_dir:

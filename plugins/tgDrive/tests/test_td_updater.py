@@ -37,12 +37,12 @@ class TestTDUpdater(unittest.TestCase):
         digest = hashlib.sha256(archive).hexdigest()
         checksums = f"{digest}  td_linux_x86_64.tar.gz\n".encode()
         responses = {
-            "https://api.github.com/repos/thedavidweng/tg-drive-cli/releases/latest": (
+            "https://api.github.com/repos/thedavidweng/tg-drive/releases/latest": (
                 b'{"tag_name":"v1.2.3"}'
             ),
-            "https://github.com/thedavidweng/tg-drive-cli/releases/download/"
+            "https://github.com/thedavidweng/tg-drive/releases/download/"
             "v1.2.3/checksums.txt": checksums,
-            "https://github.com/thedavidweng/tg-drive-cli/releases/download/"
+            "https://github.com/thedavidweng/tg-drive/releases/download/"
             "v1.2.3/td_linux_x86_64.tar.gz": archive,
         }
 
@@ -74,9 +74,9 @@ class TestTDUpdater(unittest.TestCase):
     def test_rejects_checksum_mismatch(self):
         archive = tarball_bytes()
         responses = {
-            "https://github.com/thedavidweng/tg-drive-cli/releases/download/"
+            "https://github.com/thedavidweng/tg-drive/releases/download/"
             "v1.2.3/checksums.txt": b"bad  td_linux_x86_64.tar.gz\n",
-            "https://github.com/thedavidweng/tg-drive-cli/releases/download/"
+            "https://github.com/thedavidweng/tg-drive/releases/download/"
             "v1.2.3/td_linux_x86_64.tar.gz": archive,
         }
 

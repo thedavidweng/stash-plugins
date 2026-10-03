@@ -1,6 +1,6 @@
 # TG Drive Backup for Stash
 
-A configurable, metadata-preserving backup and disaster recovery plugin connecting **[Stash](https://github.com/stashapp/stash)** to Telegram channels via **[tg-drive-cli](https://github.com/thedavidweng/tg-drive-cli)**.
+A configurable, metadata-preserving backup and disaster recovery plugin connecting **[Stash](https://github.com/stashapp/stash)** to Telegram channels via **[tg-drive](https://github.com/thedavidweng/tg-drive)**.
 
 All Stash access goes through the **GraphQL API**: scene enumeration, settings, metadata export, database snapshots, library scans and metadata import. The plugin never reads or writes Stash's SQLite database directly.
 
@@ -9,7 +9,7 @@ All Stash access goes through the **GraphQL API**: scene enumeration, settings, 
 ## Requirements
 
 - **Stash >= 0.28** (`exportObjects` / `importObjects` / `backupDatabase` are needed). On **Stash >= 0.31** database snapshots also include blobs (covers, performer images, labels); on older versions blobs are excluded (see [compatibility](#version-compatibility)).
-- **`td` (tg-drive-cli)** available to the process running Stash (or inside the Stash container), initialized with `td init`. The plugin accepts a binary, a local release archive, or a binary in its `bin/` directory. Recommended: a channel with a linked discussion group so machine records live in comment threads (ADR 0018).
+- **`td` (tg-drive)** available to the process running Stash (or inside the Stash container), initialized with `td init`. The plugin accepts a binary, a local release archive, or a binary in its `bin/` directory. Recommended: a channel with a linked discussion group so machine records live in comment threads (ADR 0018).
 - **Python 3** on the Stash host (the plugin is executed by Stash as `python3`).
 
 ## First-time setup
