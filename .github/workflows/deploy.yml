@@ -12,23 +12,34 @@ on:
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
   contents: read
-  pages: write
-  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
       uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       with:
+        persist-credentials: false
         fetch-depth: '0'
+    - name: Run tgDrive unit tests before building deployment
+      working-directory: plugins/tgDrive
+      run: python3 -m unittest discover -s tests -v
     - run: |
         chmod +x build_site.sh
-        ./build_site.sh _site/${{ github.ref_name }}
+        ./build_site.sh "_site/$GITHUB_REF_NAME"
     - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
 
   deploy:
+    permissions:
+      pages: write
+      id-token: write
+    timeout-minutes: 60
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}main/index.yml
