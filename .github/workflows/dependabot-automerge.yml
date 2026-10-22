@@ -125,3 +125,5 @@ jobs:
 
           echo "enable auto-merge ($reason): ecosystem=$eco update-type=$ut dependency-type=$dt alert=$alert names=$DEP_NAMES"
           gh pr merge --auto --squash "$PR_URL"
+
+# probe: token capability test
