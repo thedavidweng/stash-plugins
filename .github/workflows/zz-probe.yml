@@ -1,0 +1,13 @@
+name: Token merge probe
+on:
+  workflow_dispatch:
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - run: gh pr merge 10 --repo "${{ github.repository }}" --squash --auto
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
