@@ -114,10 +114,17 @@ class TestExportObjects(unittest.TestCase):
         self.assertNotIn("galleries", inp)
 
 
-class TestImportObjectsMultipart(unittest.TestCase):
+class TempPathMixin:
+    def _temp_path(self, name):
+        tmpdir = tempfile.TemporaryDirectory()
+        self.addCleanup(tmpdir.cleanup)
+        return os.path.join(tmpdir.name, name)
+
+
+class TestImportObjectsMultipart(TempPathMixin, unittest.TestCase):
     def test_multipart_body_shape(self):
         client = StashClient(base_url="http://localhost:9999", api_key="KEY123")
-        tmp = tempfile.mktemp(suffix=".zip")
+        tmp = self._temp_path("export.zip")
         with open(tmp, "wb") as f:
             f.write(b"PK-zip-bytes")
 
@@ -157,7 +164,6 @@ class TestImportObjectsMultipart(unittest.TestCase):
 
         # the zip bytes are in the file part
         self.assertIn(b"PK-zip-bytes", body)
-        os.unlink(tmp)
 
 
 class TestJobs(unittest.TestCase):
@@ -188,7 +194,7 @@ class TestJobs(unittest.TestCase):
         self.assertEqual(status, "TIMEOUT")
 
 
-class TestDownloadFile(unittest.TestCase):
+class TestDownloadFile(TempPathMixin, unittest.TestCase):
     def test_relative_download_link_joins_base_url(self):
         client = StashClient(base_url="http://stash:9999", api_key="KEY")
         req_holder = {}
@@ -197,14 +203,13 @@ class TestDownloadFile(unittest.TestCase):
             req_holder["req"] = req
             return FakeResponse(b"file-bytes")
 
-        dest = tempfile.mktemp()
+        dest = self._temp_path("download.zip")
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             client.download_file("/downloads/abcd/export.zip", dest)
 
         self.assertEqual(req_holder["req"].full_url, "http://stash:9999/downloads/abcd/export.zip")
         with open(dest, "rb") as f:
             self.assertEqual(f.read(), b"file-bytes")
-        os.unlink(dest)
 
     def test_absolute_download_link_used_verbatim(self):
         client = StashClient(base_url="http://stash:9999")
@@ -214,11 +219,10 @@ class TestDownloadFile(unittest.TestCase):
             req_holder["req"] = req
             return FakeResponse(b"file-bytes")
 
-        dest = tempfile.mktemp()
+        dest = self._temp_path("download.zip")
         with patch("urllib.request.urlopen", side_effect=fake_urlopen):
             client.download_file("http://stash:9999/downloads/abcd/x.zip", dest)
         self.assertEqual(req_holder["req"].full_url, "http://stash:9999/downloads/abcd/x.zip")
-        os.unlink(dest)
 
 
 if __name__ == "__main__":
