@@ -170,7 +170,7 @@ def _ledger(ctx: TaskContext) -> Ledger:
     channel = channel if isinstance(channel, str) and channel else None
     target = os.path.join(ctx.data_dir, _channel_ledger_name(channel) if channel else "ledger.sqlite")
     legacy = os.path.join(get_plugin_dir(), "ledger.sqlite")
-    if not os.path.exists(target) and os.path.exists(legacy) and legacy != target:
+    if not channel and not os.path.exists(target) and os.path.exists(legacy) and legacy != target:
         shutil.copy2(legacy, target)
         log.LogInfo(f"Migrated the sync ledger to persistent TD data directory: {target}")
     return Ledger(target)

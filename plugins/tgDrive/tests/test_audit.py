@@ -275,7 +275,17 @@ class TestDeletionCheck(unittest.TestCase):
         report = run_deletion_check(self.mock_stash, self.ledger)
 
         self.assertIn("findScenes", report["errors"][0])
-        self.assertIn("/data/scene1.mp4", report["deleted"]["scene"]["sample"])
+        self.assertEqual(report["status"], "partial")
+        self.assertEqual(report["deleted"], {})
+
+    def test_secondary_file_is_not_reported_as_deleted(self):
+        self._publish("/data/secondary.mp4")
+        self.mock_stash.find_scenes.return_value = {
+            "count": 1, "scenes": [{"files": [
+                {"path": "/data/primary.mp4"}, {"path": "/data/secondary.mp4"},
+            ]}],
+        }
+        self.assertEqual(run_deletion_check(self.mock_stash, self.ledger)["deleted"], {})
 
 
 class TestAdoptBackfill(unittest.TestCase):
