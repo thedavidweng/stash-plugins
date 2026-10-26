@@ -1048,9 +1048,10 @@ class TestStandaloneImageBackup(unittest.TestCase):
 
     def test_scene_batch_limit_does_not_truncate_image_library(self):
         paths = [write_file(os.path.join(self.temp_dir, f"{i}.jpg")) for i in (1, 2)]
-        self.mock_stash.find_images.return_value = {
-            "count": 2, "images": [make_image(i + 1, p) for i, p in enumerate(paths)],
-        }
+        self.mock_stash.find_images.side_effect = [
+            {"count": 2, "images": [make_image(1, paths[0])]},
+            {"count": 2, "images": [make_image(2, paths[1])]},
+        ]
         self.mock_td.upload_file.return_value = {"message_id": 77, "hash": "blake3:p"}
 
         report = self._engine(batch_size=1).run_backup()
