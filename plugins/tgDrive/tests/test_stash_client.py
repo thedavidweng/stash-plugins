@@ -105,13 +105,46 @@ class TestExportObjects(unittest.TestCase):
         self.assertEqual(url, "http://x/export.zip")
         inp = call_variables(mock_exec)["input"]
         self.assertEqual(inp["scenes"], {"all": True})
+        self.assertEqual(inp["images"], {"all": True})
+        self.assertEqual(inp["galleries"], {"all": True})
         self.assertEqual(inp["performers"], {"all": True})
         self.assertEqual(inp["studios"], {"all": True})
         self.assertEqual(inp["tags"], {"all": True})
         self.assertEqual(inp["groups"], {"all": True})
         self.assertTrue(inp["includeDependencies"])
-        self.assertNotIn("images", inp)
-        self.assertNotIn("galleries", inp)
+
+
+class TestFindImagesAndGalleries(unittest.TestCase):
+    def test_find_images_requests_union_fragments_and_gallery_ids(self):
+        client = StashClient(base_url="http://localhost:9999")
+        fake_data = {"findImages": {"count": 0, "images": []}}
+        with patch.object(client, "execute", return_value=fake_data) as mock_exec:
+            client.find_images(page=2, per_page=100)
+        query = mock_exec.call_args.args[0]
+        # VisualFile is a union: both inline fragments are required to read
+        # path/size, and video clip members need duration from VideoFile.
+        self.assertIn("... on ImageFile", query)
+        self.assertIn("... on VideoFile", query)
+        self.assertIn("duration", query)
+        self.assertIn("galleries {", query)
+        self.assertIn("paths {", query)
+        self.assertIn("fingerprints {", query)
+        variables = call_variables(mock_exec)
+        self.assertEqual(variables["filter"], {
+            "page": 2, "per_page": 100, "sort": "updated_at", "direction": "ASC",
+        })
+
+    def test_find_galleries_requests_files_and_folder(self):
+        client = StashClient(base_url="http://localhost:9999")
+        fake_data = {"findGalleries": {"count": 0, "galleries": []}}
+        with patch.object(client, "execute", return_value=fake_data) as mock_exec:
+            client.find_galleries(page=1, per_page=40)
+        query = mock_exec.call_args.args[0]
+        # files non-empty marks a zip-based gallery; folder marks folder-based.
+        self.assertIn("files {", query)
+        self.assertIn("folder {", query)
+        self.assertIn("image_count", query)
+        self.assertIn("fingerprints {", query)
 
 
 class TestImportObjectsMultipart(unittest.TestCase):
@@ -219,6 +252,41 @@ class TestDownloadFile(unittest.TestCase):
             client.download_file("http://stash:9999/downloads/abcd/x.zip", dest)
         self.assertEqual(req_holder["req"].full_url, "http://stash:9999/downloads/abcd/x.zip")
         os.unlink(dest)
+
+
+class TestFindScenesQuery(unittest.TestCase):
+    def test_find_scenes_requests_fingerprints(self):
+        client = StashClient(base_url="http://localhost:9999")
+        fake_data = {"findScenes": {"count": 0, "scenes": []}}
+        with patch.object(client, "execute", return_value=fake_data) as mock_exec:
+            client.find_scenes(page=1, per_page=40)
+        query = mock_exec.call_args.args[0]
+        self.assertIn("files {", query)
+        self.assertIn("fingerprints {", query)
+        self.assertIn("duration", query)
+
+
+class TestFileFingerprint(unittest.TestCase):
+    def test_stable_sorted_derivation(self):
+        from stash_client import file_fingerprint
+
+        file_a = {"fingerprints": [
+            {"type": "md5", "value": "abc"},
+            {"type": "oshash", "value": "xyz"},
+        ]}
+        file_b = {"fingerprints": [
+            {"type": "oshash", "value": "xyz"},
+            {"type": "md5", "value": "abc"},
+        ]}
+        self.assertEqual(file_fingerprint(file_a), file_fingerprint(file_b))
+        self.assertIn("md5=abc", file_fingerprint(file_a))
+
+    def test_no_fingerprints_yields_none(self):
+        from stash_client import file_fingerprint
+
+        self.assertIsNone(file_fingerprint({}))
+        self.assertIsNone(file_fingerprint({"fingerprints": []}))
+        self.assertIsNone(file_fingerprint({"fingerprints": [{"type": "md5"}]}))
 
 
 if __name__ == "__main__":

@@ -16,11 +16,13 @@ resolution) and prints the result once.
 import argparse
 import json
 import os
+import re
 import shutil
 import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, Optional
 
+from audit import backfill_adopted_library, run_deletion_check, run_remote_audit
 from ledger import Ledger
 import log
 from restore_engine import RestoreEngine
@@ -28,12 +30,12 @@ from settings import load_settings
 from setup_check import SETUP_GUIDE_URL, build_setup_report, run_health_check
 from stash_client import StashClient
 from sync_engine import SyncEngine
-from td_client import TDClient
+from td_client import TDClient, TDError
 from td_resolver import TDResolution, resolve_td_path
 from td_updater import install_td_core
 
 # Modes that need a working td binary; the others never invoke td.
-TD_REQUIRED_MODES = ("health", "backup", "restore")
+TD_REQUIRED_MODES = ("health", "backup", "adopt", "restore")
 
 NOT_READY_MESSAGE = (
     "TD Drive is not ready. Complete the setup shown by "
@@ -82,13 +84,21 @@ def parse_args(argv: Optional[list] = None) -> argparse.Namespace:
     parser.add_argument("--td-data-dir", default=None, help="Persistent td config/session/cache directory")
     parser.add_argument("--td-version", default=None, help="td release tag or latest")
     parser.add_argument("--channel", default=None, help="Target Telegram channel ID or username")
+    parser.add_argument("--adopt-remote-dir", dest="adopt_remote_dir", default=None, help="Remote directory for td adopt --unmanaged")
     parser.add_argument("--max-size-gb", type=float, default=None, help="Maximum file size in GB")
     parser.add_argument("--batch-size", type=int, default=None, help="Maximum scenes to process per run")
     parser.add_argument("--restore-dir", default=None, help="Directory to restore media into")
     parser.add_argument("--backup-scenes", dest="backup_scenes", type=str, default=None, help="true/false")
+    parser.add_argument("--backup-images", dest="backup_images", type=str, default=None, help="true/false")
+    parser.add_argument("--backup-galleries", dest="backup_galleries", type=str, default=None, help="true/false")
     parser.add_argument("--backup-metadata", dest="backup_metadata", type=str, default=None, help="true/false")
     parser.add_argument("--backup-database", dest="backup_database", type=str, default=None, help="true/false")
     parser.add_argument("--backup-config", dest="backup_config", type=str, default=None, help="true/false")
+    parser.add_argument("--media-upload-mode", dest="media_upload_mode", default=None, help="archive or browse")
+    parser.add_argument(
+        "--scene-selection", dest="scene_selection", default=None,
+        help="all or curated (curated uploads only scenes with title, tags, and stash-box match)",
+    )
     return parser.parse_args(argv)
 
 
@@ -104,12 +114,15 @@ class TaskContext:
     td_source: str
     td: TDClient
     dry_run: bool
+    channel: Optional[str]
 
 
 def _build_context(mode: str, stash: StashClient, settings: Dict[str, Any]) -> TaskContext:
     data_dir = get_td_data_dir(settings)
     if not settings["td_data_dir"]:
         os.makedirs(data_dir, exist_ok=True)
+
+    channel = settings["target_channel"] or None
 
     try:
         resolution = resolve_td_path(settings["td_binary_path"], get_plugin_dir())
@@ -121,7 +134,7 @@ def _build_context(mode: str, stash: StashClient, settings: Dict[str, Any]) -> T
     td = TDClient(
         td_path=resolution.path if resolution else (settings["td_binary_path"] or "td"),
         data_dir=data_dir,
-        channel=settings["target_channel"] or None,
+        channel=channel,
     )
     return TaskContext(
         stash=stash,
@@ -132,13 +145,30 @@ def _build_context(mode: str, stash: StashClient, settings: Dict[str, Any]) -> T
         td_source=resolution.source if resolution else "not resolved",
         td=td,
         dry_run=(mode == "dry_run"),
+        channel=channel,
     )
 
 
+def _channel_ledger_name(channel: str) -> str:
+    """File-safe per-channel ledger name derived from the channel id/username."""
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", channel).strip("._")
+    return f"ledger-{safe or 'channel'}.sqlite"
+
+
 def _ledger(ctx: TaskContext) -> Ledger:
-    """Open the persistent sync index, migrating the legacy plugin-local file."""
+    """
+    Open the sync index for the task's channel scope.
+
+    Every channel keeps its own ledger file (ledger-<channel>.sqlite), so
+    de-dup, deletion reports and audits never bleed across channels: a file
+    published to one channel is not "already backed up" for another. When no
+    channel is set, the default ledger.sqlite is used (the bound-channel
+    behavior), migrating the legacy plugin-local file.
+    """
     os.makedirs(ctx.data_dir, exist_ok=True)
-    target = os.path.join(ctx.data_dir, "ledger.sqlite")
+    channel = getattr(ctx, "channel", None)
+    channel = channel if isinstance(channel, str) and channel else None
+    target = os.path.join(ctx.data_dir, _channel_ledger_name(channel) if channel else "ledger.sqlite")
     legacy = os.path.join(get_plugin_dir(), "ledger.sqlite")
     if not os.path.exists(target) and os.path.exists(legacy) and legacy != target:
         shutil.copy2(legacy, target)
@@ -208,6 +238,14 @@ def run_health(ctx: TaskContext) -> Dict[str, Any]:
 
 
 def run_backup(ctx: TaskContext) -> Dict[str, Any]:
+    if not ctx.channel:
+        message = (
+            "No target channel configured. Set Target Telegram Channel in "
+            "Stash Settings -> Plugins -> TG Drive Backup (channel ID or "
+            "username). Backups never default to a channel."
+        )
+        log.LogWarning(message)
+        return {"status": "error", "message": message, "setup_guide": SETUP_GUIDE_URL}
     if not ctx.dry_run:
         gate = _require_ready_td(ctx)
         if gate is not None:
@@ -223,10 +261,73 @@ def run_backup(ctx: TaskContext) -> Dict[str, Any]:
 
 
 def run_verify(ctx: TaskContext) -> Dict[str, Any]:
-    log.LogInfo("Running ledger and hash verification...")
-    summary = _ledger(ctx).get_summary()
-    log.LogInfo(f"Verification complete: {summary}")
-    return {"status": "ok", "ledger_summary": summary}
+    log.LogInfo("Running ledger verification, remote hash audit and Stash deletion check...")
+    ledger = _ledger(ctx)
+    summary = ledger.get_summary()
+    audit = run_remote_audit(ctx.td, ledger)
+    log.LogInfo(
+        f"Remote audit: {audit['status']} - {audit['verified']} verified, "
+        f"{audit['missing_remote']['count']} missing, {audit['hash_mismatch']['count']} hash mismatches, "
+        f"{audit['remote_extras']['count']} unaccounted remote files"
+    )
+    if audit["status"] == "local_only":
+        log.LogWarning(
+            "The remote drive could not be read; reporting the local ledger only."
+        )
+    deletion = run_deletion_check(ctx.stash, ledger)
+    if deletion.get("status") == "deleted":
+        log.LogWarning(
+            "Published media is missing from the Stash library (deleted or moved). "
+            "Verify the report and run `td rm --confirm` on the remote copies you "
+            "no longer want. Nothing was modified by this check."
+        )
+    else:
+        log.LogInfo(
+            f"Stash deletion check: {deletion['checked']} current files, "
+            f"{sum(v['count'] for v in deletion['deleted'].values())} published rows missing from Stash"
+        )
+    return {
+        "status": "ok",
+        "ledger_summary": summary,
+        "remote_audit": audit,
+        "stash_deletions": deletion,
+    }
+
+
+def run_adopt(ctx: TaskContext) -> Dict[str, Any]:
+    """
+    Adopt existing channel messages into the td index (td adopt, ADR 0019)
+    and record them in the ledger. No bytes move and nothing is deleted; the
+    adopter names files under the configured remote directory, downloading
+    each one once to compute its BLAKE3 hash.
+    """
+    gate = _require_ready_td(ctx)
+    if gate is not None:
+        return gate
+    into = ctx.settings["adopt_remote_dir"] or "/"
+    try:
+        adopted = ctx.td.adopt(unmanaged=True, into=into, with_hash=True, confirm=True)
+    except TDError as exc:
+        return {
+            "status": "error",
+            "message": f"td adopt failed: {exc}",
+            "setup_guide": SETUP_GUIDE_URL,
+        }
+    ledger = _ledger(ctx)
+    try:
+        backfill = backfill_adopted_library(ctx.td, ledger, into)
+    except TDError as exc:
+        backfill = {"rows_added": 0, "error": str(exc)}
+    return {
+        "status": "ok",
+        "adopt": adopted,
+        "ledger_backfill": backfill,
+        "message": (
+            f"Adopted {adopted.get('adopted', 0)} message(s) into {into} and "
+            f"recorded {backfill.get('rows_added', 0)} file(s) in the ledger. "
+            "Re-run Verify Remote & Ledger to audit the adopted rows."
+        ),
+    }
 
 
 def run_restore(ctx: TaskContext) -> Dict[str, Any]:
@@ -255,6 +356,7 @@ HANDLERS: Dict[str, Callable[[TaskContext], Dict[str, Any]]] = {
     "backup": run_backup,
     "dry_run": run_backup,
     "verify": run_verify,
+    "adopt": run_adopt,
     "restore": run_restore,
 }
 
@@ -290,15 +392,20 @@ def main() -> None:
         payload_settings=payload_settings,
         cli_overrides={
             "backup_scenes": cli_args.backup_scenes,
+            "backup_images": cli_args.backup_images,
+            "backup_galleries": cli_args.backup_galleries,
             "backup_metadata": cli_args.backup_metadata,
             "backup_database": cli_args.backup_database,
             "backup_config": cli_args.backup_config,
+            "media_upload_mode": cli_args.media_upload_mode,
+            "scene_selection": cli_args.scene_selection,
             "max_file_size_gb": cli_args.max_size_gb,
             "batch_size": cli_args.batch_size,
             "td_binary_path": cli_args.td_path,
             "td_data_dir": cli_args.td_data_dir,
             "td_version": cli_args.td_version,
             "target_channel": cli_args.channel,
+            "adopt_remote_dir": cli_args.adopt_remote_dir,
             "restore_dir": cli_args.restore_dir,
         },
     )

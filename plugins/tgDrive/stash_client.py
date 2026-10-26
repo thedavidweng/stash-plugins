@@ -34,6 +34,26 @@ INCLUDE_BLOBS_MIN_VERSION = (0, 31)
 ACTIVE_JOB_STATUSES = ("READY", "RUNNING")
 
 
+def file_fingerprint(file_dict: Dict[str, Any]) -> Optional[str]:
+    """
+    Stable content fingerprint of a Stash file record.
+
+    Stash files carry fingerprints (md5, oshash, sha256, ...). Comparing
+    this derived string across runs detects changed bytes at an unchanged
+    path without downloading anything. Files with no fingerprints yield
+    None, in which case callers fall back to size comparison.
+    """
+    fingerprints = file_dict.get("fingerprints") or []
+    parts = sorted(
+        f"{f.get('type')}={f.get('value')}"
+        for f in fingerprints
+        if f and f.get("type") and f.get("value")
+    )
+    if not parts:
+        return None
+    return "|".join(parts)
+
+
 def parse_version(version: str) -> Optional[Tuple[int, int]]:
     """Parse a Stash version string like "v0.31.1-167-gb872e360" into (major, minor)."""
     if not version:
@@ -125,6 +145,10 @@ class StashClient:
                     tags {
                         name
                     }
+                    stash_ids {
+                        endpoint
+                        stash_id
+                    }
                     paths {
                         screenshot
                     }
@@ -135,6 +159,10 @@ class StashClient:
                         duration
                         width
                         height
+                        fingerprints {
+                            type
+                            value
+                        }
                     }
                 }
             }
@@ -166,6 +194,134 @@ class StashClient:
             return True
         except Exception:
             return False
+
+    # ---------------------------------------------------------------- images
+
+    def find_images(self, page: int = 1, per_page: int = 50) -> Dict[str, Any]:
+        """
+        Enumerate images for the gallery/image backup legs.
+
+        visual_files is a union (ImageFile | VideoFile: Stash also accepts
+        video clips as images), so both inline fragments are requested.
+        galleries.id groups images into galleries; images without any
+        gallery are standalone. paths.image is the HTTP URL serving the
+        image bytes (also for images inside zip galleries).
+        """
+        q = """
+        query($filter: FindFilterType!) {
+            findImages(filter: $filter) {
+                count
+                images {
+                    id
+                    title
+                    code
+                    date
+                    studio {
+                        name
+                    }
+                    performers {
+                        name
+                    }
+                    tags {
+                        name
+                    }
+                    visual_files {
+                        ... on ImageFile {
+                            id
+                            path
+                            size
+                            width
+                            height
+                            fingerprints {
+                                type
+                                value
+                            }
+                        }
+                        ... on VideoFile {
+                            id
+                            path
+                            size
+                            duration
+                            width
+                            height
+                            fingerprints {
+                                type
+                                value
+                            }
+                        }
+                    }
+                    paths {
+                        image
+                    }
+                    galleries {
+                        id
+                    }
+                }
+            }
+        }
+        """
+        variables = {
+            "filter": {
+                "page": page,
+                "per_page": per_page,
+                "sort": "updated_at",
+                "direction": "ASC",
+            }
+        }
+        res = self.execute(q, variables)
+        return res.get("findImages", {"count": 0, "images": []})
+
+    def find_galleries(self, page: int = 1, per_page: int = 50) -> Dict[str, Any]:
+        """
+        Enumerate galleries. A gallery with files is zip-based (the zip is
+        the media unit); a gallery with only a folder is folder-based (its
+        member image files are the media units).
+        """
+        q = """
+        query($filter: FindFilterType!) {
+            findGalleries(filter: $filter) {
+                count
+                galleries {
+                    id
+                    title
+                    code
+                    date
+                    image_count
+                    studio {
+                        name
+                    }
+                    performers {
+                        name
+                    }
+                    tags {
+                        name
+                    }
+                    folder {
+                        path
+                    }
+                    files {
+                        id
+                        path
+                        size
+                        fingerprints {
+                            type
+                            value
+                        }
+                    }
+                }
+            }
+        }
+        """
+        variables = {
+            "filter": {
+                "page": page,
+                "per_page": per_page,
+                "sort": "updated_at",
+                "direction": "ASC",
+            }
+        }
+        res = self.execute(q, variables)
+        return res.get("findGalleries", {"count": 0, "galleries": []})
 
     # ------------------------------------------------- system / configuration
 
@@ -223,8 +379,10 @@ class StashClient:
         Run a native Stash JSON export synchronously and return the download
         URL of the resulting zip. The zip contains the full metadata export
         (scenes with markers, ratings and performer/tag/studio associations,
-        plus files with fingerprints) and is exactly what importObjects
-        accepts on restore.
+        images, galleries, plus files with fingerprints) and is exactly what
+        importObjects accepts on restore. Images and galleries must be in
+        the export: restore completeness depends on their objects surviving
+        alongside the restored media bytes.
         """
         q = """
         mutation($input: ExportObjectsInput!) {
@@ -234,6 +392,8 @@ class StashClient:
         variables = {
             "input": {
                 "scenes": {"all": True},
+                "images": {"all": True},
+                "galleries": {"all": True},
                 "performers": {"all": True},
                 "studios": {"all": True},
                 "tags": {"all": True},

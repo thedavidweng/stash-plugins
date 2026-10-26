@@ -6,7 +6,7 @@ from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from td_client import TDClient, TDRateLimitedError, TDLockedError, TDNotFoundError, TDError
+from td_client import TDClient, TDRateLimitedError, TDLockedError, TDNotFoundError, TDError, parse_td_version
 
 
 class TestTDClient(unittest.TestCase):
@@ -54,6 +54,17 @@ class TestTDClient(unittest.TestCase):
         cmd = mock_run.call_args.args[0]
         self.assertIn("--replace", cmd)
         self.assertIn("--confirm", cmd)
+
+    @patch("subprocess.run")
+    def test_remove_confirms_deletion(self, mock_run):
+        mock_run.return_value = self._mock_run({"mode": "delete", "path": "/gals/trip/a.jpg"})
+        res = self.client.remove("/gals/trip/a.jpg")
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(res["mode"], "delete")
+        self.assertEqual(cmd[1], "rm")
+        self.assertIn("/gals/trip/a.jpg", cmd)
+        self.assertIn("--confirm", cmd)
+        self.assertNotIn("--replace", cmd)
 
     @patch("subprocess.run")
     def test_upload_waits_through_flood_waits(self, mock_run):
@@ -185,6 +196,63 @@ class TestTDClient(unittest.TestCase):
             "--session '/data dir/td-data/session.json' "
             "--db '/data dir/td-data/local_cache.db' status",
         )
+
+    @patch("subprocess.run")
+    def test_upload_album_multi_file_form(self, mock_run):
+        """Albums use the td multi-file form: <locals...> <dir/> without --replace."""
+        mock_run.return_value = self._mock_run({
+            "uploaded": 2, "skipped": 0, "errors": [],
+            "albums": [{
+                "grouped_id": 730001, "reply_message_id": 8835,
+                "message_ids": [8821, 8822],
+                "paths": ["/stash-browse/gallery/1/a.jpg", "/stash-browse/gallery/1/b.jpg"],
+            }],
+            "channel_id": "-100123",
+        })
+
+        res = self.client.upload_album(
+            ["/local/a.jpg", "/local/b.jpg"],
+            "/stash-browse/gallery/1",
+            as_kind="photo",
+        )
+
+        self.assertEqual(res["uploaded"], 2)
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[:2], ["/mock/td", "cp"])
+        # sources first, then the trailing-slash destination, then flags
+        self.assertEqual(
+            cmd[cmd.index("/local/a.jpg"):],
+            ["/local/a.jpg", "/local/b.jpg", "/stash-browse/gallery/1/", "--as", "photo", "--wait", "--json"],
+        )
+        # --replace is structurally impossible in the album form (ERR_USAGE)
+        self.assertNotIn("--replace", cmd)
+
+    def test_upload_album_requires_two_members(self):
+        with self.assertRaises(TDError):
+            self.client.upload_album(["/local/only.jpg"], "/some/dir")
+
+    @patch("subprocess.run")
+    def test_tree_returns_nested_nodes(self, mock_run):
+        mock_run.return_value = self._mock_run({
+            "path": "/",
+            "tree": [
+                {"type": "dir", "name": "stash-browse", "path": "/stash-browse",
+                 "children": [{"type": "file", "name": "v.mp4", "path": "/stash-browse/v.mp4"}]},
+            ],
+        })
+        nodes = self.client.tree("/", depth=64)
+        self.assertEqual(nodes[0]["children"][0]["path"], "/stash-browse/v.mp4")
+        cmd = mock_run.call_args.args[0]
+        self.assertEqual(cmd[1], "tree")
+        self.assertIn("--depth", cmd)
+
+    def test_parse_td_version(self):
+        self.assertEqual(parse_td_version("0.2.0"), (0, 2, 0))
+        self.assertEqual(parse_td_version("v0.2.1"), (0, 2, 1))
+        self.assertEqual(parse_td_version("0.2"), (0, 2, 0))
+        self.assertIsNone(parse_td_version("dev"))
+        self.assertIsNone(parse_td_version("unknown"))
+        self.assertIsNone(parse_td_version(""))
 
 
 if __name__ == "__main__":

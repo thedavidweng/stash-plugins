@@ -38,12 +38,26 @@ class Ledger:
                     message_id INTEGER,
                     status TEXT NOT NULL,
                     reason TEXT,
-                    updated_at TEXT NOT NULL
+                    updated_at TEXT NOT NULL,
+                    remote_path TEXT,
+                    fingerprint TEXT
                 )
             """)
+            # ledgers created before newer columns existed gain them in
+            # place; remote_path is derived from the canonical path when
+            # absent, fingerprint is the Stash content fingerprint recorded
+            # at publish time (used for content-change detection).
+            columns = {
+                row[1] for row in conn.execute("PRAGMA table_info(ledger_items)").fetchall()
+            }
+            if "remote_path" not in columns:
+                conn.execute("ALTER TABLE ledger_items ADD COLUMN remote_path TEXT")
+            if "fingerprint" not in columns:
+                conn.execute("ALTER TABLE ledger_items ADD COLUMN fingerprint TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_path ON ledger_items (canonical_path)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_status ON ledger_items (status)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_updated_at ON ledger_items (updated_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_ledger_remote ON ledger_items (remote_path)")
 
     def get(self, canonical_path: str) -> Optional[Dict[str, Any]]:
         with self._get_conn() as conn:
@@ -61,12 +75,26 @@ class Ledger:
         file_id: Optional[int] = None,
         blake3: Optional[str] = None,
         message_id: Optional[int] = None,
+        remote_path: Optional[str] = None,
+        fingerprint: Optional[str] = None,
     ) -> None:
+        """
+        Record a published item.
+
+        Archive and artifact rows mirror the remote path exactly, so their
+        remote_path defaults to the canonical path. "browse:"-prefixed keys
+        (mode-scoped records) are NOT remote paths; those rows keep NULL
+        unless the caller records the actual remote slot, and a NULL never
+        overwrites a previously recorded path. fingerprint is the Stash
+        content fingerprint recorded at publish time; the backup engine
+        compares it to detect changed bytes at an unchanged path.
+        """
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        default_remote = canonical_path if canonical_path.startswith("/") else None
         with self._get_conn() as conn:
             conn.execute("""
-                INSERT INTO ledger_items (file_id, canonical_path, kind, size, blake3, message_id, status, reason, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'published', NULL, ?)
+                INSERT INTO ledger_items (file_id, canonical_path, kind, size, blake3, message_id, status, reason, updated_at, remote_path, fingerprint)
+                VALUES (?, ?, ?, ?, ?, ?, 'published', NULL, ?, ?, ?)
                 ON CONFLICT(canonical_path) DO UPDATE SET
                     file_id=excluded.file_id,
                     kind=excluded.kind,
@@ -75,8 +103,10 @@ class Ledger:
                     message_id=excluded.message_id,
                     status='published',
                     reason=NULL,
-                    updated_at=excluded.updated_at
-            """, (file_id, canonical_path, kind, size, blake3, message_id, now))
+                    updated_at=excluded.updated_at,
+                    remote_path=COALESCE(excluded.remote_path, ledger_items.remote_path),
+                    fingerprint=excluded.fingerprint
+            """, (file_id, canonical_path, kind, size, blake3, message_id, now, remote_path or default_remote, fingerprint))
 
     def record_skip(
         self,
@@ -166,4 +196,19 @@ class Ledger:
                 elif status == "failed":
                     stats["failed_count"] = cnt
                     stats["failed_bytes"] = b
+
+            kind_cur = conn.execute("""
+                SELECT
+                    kind,
+                    COUNT(*) as count,
+                    COALESCE(SUM(size), 0) as total_bytes
+                FROM ledger_items
+                WHERE status = 'published'
+                GROUP BY kind
+                ORDER BY kind
+            """)
+            stats["published_by_kind"] = {
+                row["kind"]: {"count": row["count"], "bytes": row["total_bytes"]}
+                for row in kind_cur.fetchall()
+            }
             return stats

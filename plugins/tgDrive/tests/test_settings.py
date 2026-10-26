@@ -18,18 +18,35 @@ class TestLoadSettings(unittest.TestCase):
     def test_defaults(self):
         settings = load_settings(stash=None, plugin_id=None)
         self.assertTrue(settings["backup_scenes"])
+        self.assertTrue(settings["backup_images"])
+        self.assertTrue(settings["backup_galleries"])
         self.assertTrue(settings["backup_metadata"])
         self.assertTrue(settings["backup_database"])
         self.assertFalse(settings["backup_config"])
-        self.assertEqual(settings["scene_upload_mode"], "archive")
+        self.assertEqual(settings["media_upload_mode"], "archive")
+        self.assertEqual(settings["scene_selection"], "all")
         self.assertEqual(settings["max_file_size_gb"], 2.0)
         self.assertEqual(settings["batch_size"], 50)
         self.assertEqual(settings["td_data_dir"], "")
         self.assertEqual(settings["td_version"], "latest")
 
+    def test_scene_selection_coerces_to_valid_values(self):
+        settings = load_settings(
+            stash=None, plugin_id=None,
+            cli_overrides={"scene_selection": "curated"},
+        )
+        self.assertEqual(settings["scene_selection"], "curated")
+        settings = load_settings(
+            stash=None, plugin_id=None,
+            cli_overrides={"scene_selection": "BOGUS"},
+        )
+        self.assertEqual(settings["scene_selection"], "all")
+
     def test_stash_settings_used(self):
         stash = make_stash({
             "backup_scenes": False,
+            "backup_images": False,
+            "backup_galleries": False,
             "backup_config": True,
             "max_file_size_gb": 4,
             "target_channel": "@mydrive",
@@ -39,6 +56,8 @@ class TestLoadSettings(unittest.TestCase):
         settings = load_settings(stash=stash, plugin_id="tgDrive")
         stash.get_plugin_settings.assert_called_once_with("tgDrive")
         self.assertFalse(settings["backup_scenes"])
+        self.assertFalse(settings["backup_images"])
+        self.assertFalse(settings["backup_galleries"])
         self.assertTrue(settings["backup_config"])
         self.assertEqual(settings["max_file_size_gb"], 4.0)
         self.assertEqual(settings["target_channel"], "@mydrive")
@@ -93,15 +112,26 @@ class TestLoadSettings(unittest.TestCase):
         settings = load_settings(payload_settings={
             "max_file_size_gb": "not-a-number",
             "batch_size": None,
-            "scene_upload_mode": "invalid",
+            "media_upload_mode": "invalid",
         })
         self.assertEqual(settings["max_file_size_gb"], 2.0)
         self.assertEqual(settings["batch_size"], 50)
-        self.assertEqual(settings["scene_upload_mode"], "archive")
+        self.assertEqual(settings["media_upload_mode"], "archive")
 
-    def test_scene_upload_mode_is_normalized(self):
-        settings = load_settings(payload_settings={"scene_upload_mode": "BROWSE"})
-        self.assertEqual(settings["scene_upload_mode"], "browse")
+    def test_media_upload_mode_is_normalized(self):
+        settings = load_settings(payload_settings={"media_upload_mode": "BROWSE"})
+        self.assertEqual(settings["media_upload_mode"], "browse")
+
+    def test_legacy_scene_upload_mode_still_honored(self):
+        """Renamed settings keep reading the old Stash-stored value."""
+        stash = make_stash({"scene_upload_mode": "browse"})
+        settings = load_settings(stash=stash, plugin_id="tgDrive")
+        self.assertEqual(settings["media_upload_mode"], "browse")
+
+    def test_new_mode_key_beats_legacy_alias(self):
+        stash = make_stash({"scene_upload_mode": "browse", "media_upload_mode": "archive"})
+        settings = load_settings(stash=stash, plugin_id="tgDrive")
+        self.assertEqual(settings["media_upload_mode"], "archive")
 
 
 if __name__ == "__main__":

@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from setup_check import build_setup_report, run_health_check
+from setup_check import build_setup_report, run_health_check, version_gate
 from td_client import TDClient
 
 
@@ -84,6 +84,49 @@ class TestSetupCheck(unittest.TestCase):
         self.assertFalse(report["ready"])
         self.assertEqual(report["checks"]["data_directory"]["status"], "warn")
         self.assertIn("create", report["checks"]["data_directory"]["hint"].lower())
+
+
+class TestVersionGate(unittest.TestCase):
+    def test_release_at_or_above_minimum_passes(self):
+        self.assertEqual(version_gate("0.2.1")["status"], "pass")
+        self.assertEqual(version_gate("v1.3.0")["status"], "pass")
+
+    def test_previous_release_now_fails(self):
+        """The v0.2.1 lock rejects the prior v0.2.0 release."""
+        check = version_gate("0.2.0")
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("v0.2.1", check["message"])
+
+    def test_release_below_minimum_fails_with_remediation(self):
+        check = version_gate("0.1.3")
+        self.assertEqual(check["status"], "fail")
+        self.assertIn("v0.2.1", check["message"])
+        self.assertIn("Install / Update TD Core", check["hint"])
+
+    def test_dev_builds_pass_with_note(self):
+        """td binaries compiled from a checkout carry everything main has."""
+        check = version_gate("dev")
+        self.assertEqual(check["status"], "pass")
+        self.assertIn("development", check["message"])
+
+    def test_old_release_blocks_readiness(self):
+        with tempfile.TemporaryDirectory() as data_dir:
+            td = make_td(data_dir)
+            td.version.return_value = {"version": "0.1.2"}
+            td.auth_status.return_value = {"authenticated": True}
+            td.doctor.return_value = {"checks": {}}
+            td.status.return_value = {"channel_id": "123"}
+
+            report = run_health_check(td, "plugin directory")
+
+        self.assertFalse(report["ready"])
+        self.assertEqual(report["checks"]["version"]["status"], "fail")
+
+    def test_setup_report_announces_required_version(self):
+        with tempfile.TemporaryDirectory() as data_dir:
+            td = TDClient(td_path="/opt/td", data_dir=data_dir)
+            report = build_setup_report(td, "plugin directory")
+        self.assertEqual(report["required_td_version"], ">= v0.2.1")
 
 
 class TestSetupReport(unittest.TestCase):
