@@ -28,7 +28,7 @@ Two more report-only helpers live here:
   audit and coverage math see them (adopt itself moves no bytes).
 """
 import os
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import log
 from ledger import Ledger

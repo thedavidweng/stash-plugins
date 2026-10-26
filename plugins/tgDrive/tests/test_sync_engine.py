@@ -1046,6 +1046,20 @@ class TestStandaloneImageBackup(unittest.TestCase):
         self.assertEqual(report["images_published"], 1)
         self.assertEqual(report["images_total"], 1)
 
+    def test_scene_batch_limit_does_not_truncate_image_library(self):
+        paths = [write_file(os.path.join(self.temp_dir, f"{i}.jpg")) for i in (1, 2)]
+        self.mock_stash.find_images.return_value = {
+            "count": 2, "images": [make_image(i + 1, p) for i, p in enumerate(paths)],
+        }
+        self.mock_td.upload_file.return_value = {"message_id": 77, "hash": "blake3:p"}
+
+        report = self._engine(batch_size=1).run_backup()
+
+        self.assertEqual(report["images_published"], 2)
+        self.assertEqual(self.mock_td.upload_file.call_count, 2)
+        for path in paths:
+            self.assertEqual(self.ledger.get(path)["status"], "published")
+
     def test_browse_image_publishes_native_photo(self):
         path = write_file(os.path.join(self.temp_dir, "pics", "poster.jpg"))
         image = make_image(
