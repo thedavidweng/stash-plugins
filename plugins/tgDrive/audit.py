@@ -50,7 +50,7 @@ SKIP_DELETION_PREFIXES = ("browse:", "missing:")
 
 
 def _paged_paths(fetch, items_key: str) -> List[str]:
-    """Enumerate primary file paths of one Stash object type, paged."""
+    """Enumerate all file paths of one Stash object type, paged."""
     paths: List[str] = []
     page = 1
     while True:
@@ -61,8 +61,7 @@ def _paged_paths(fetch, items_key: str) -> List[str]:
         count = data.get("count") or 0
         for obj in objects:
             files = obj.get("visual_files") or obj.get("files") or []
-            if files and files[0].get("path"):
-                paths.append(files[0]["path"])
+            paths.extend(os.path.normpath(file["path"]) for file in files if file.get("path"))
         if page * 200 >= count or count == 0:
             break
         page += 1
@@ -122,9 +121,13 @@ def run_deletion_check(stash: StashClient, ledger: Ledger) -> Dict[str, Any]:
         report["errors"].append(f"findGalleries: {e}")
         gallery_paths = set()
 
+    if report["errors"]:
+        report["status"] = "partial"
+        return report
+
     current = scene_paths | image_paths | gallery_paths
     for kind, paths in by_kind.items():
-        missing = [p for p in paths if p not in current]
+        missing = [p for p in paths if os.path.normpath(p) not in current]
         if missing:
             report["deleted"][kind] = _sample(missing)
     if report["deleted"]:

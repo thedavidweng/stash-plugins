@@ -61,6 +61,18 @@ class TestHelpers(unittest.TestCase):
             self.assertEqual(migrated.get("/scene.mp4")["status"], "published")
             self.assertTrue(os.path.exists(os.path.join(data_dir, "ledger.sqlite")))
 
+    @patch("tg_drive.get_plugin_dir")
+    def test_unscoped_legacy_ledger_is_not_copied_to_new_channels(self, mock_plugin_dir):
+        with tempfile.TemporaryDirectory() as plugin_dir, tempfile.TemporaryDirectory() as data_dir:
+            mock_plugin_dir.return_value = plugin_dir
+            Ledger(os.path.join(plugin_dir, "ledger.sqlite")).record_success("/scene.mp4", "scene:archive", 10)
+            ctx = MagicMock(spec=TaskContext)
+            ctx.data_dir = data_dir
+            for channel in ("first", "second"):
+                ctx.channel = channel
+                self.assertIsNone(_ledger(ctx).get("/scene.mp4"))
+            self.assertIsNotNone(Ledger(os.path.join(plugin_dir, "ledger.sqlite")).get("/scene.mp4"))
+
     def test_channel_ledger_name_is_file_safe(self):
         self.assertEqual(_channel_ledger_name("3984479327"), "ledger-3984479327.sqlite")
         self.assertEqual(_channel_ledger_name("NSFW"), "ledger-NSFW.sqlite")
