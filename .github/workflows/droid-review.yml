@@ -30,7 +30,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Run Droid Auto Review
-        uses: Factory-AI/droid-action@ec767fcf5fac43b64e746cd42bb398b3b0b529ed # v10
+        uses: Factory-AI/droid-action@bb78b445f5c63185e4546ae283a3c6946f44cce2 # v11
         with:
           factory_api_key: ${{ secrets.FACTORY_API_KEY }}
           # CodeRabbit re-triggers pull_request events; without this the action
