@@ -1,0 +1,37 @@
+name: Workflow lint
+
+# Owner-wide jactionlint adoption: https://github.com/thedavidweng/thedavidweng/issues/17
+#
+# Standalone on purpose: the repo has no mise.toml and this job must stay
+# visible on *every* pull request, so it carries no `paths:` filter the way
+# `test.yml` does. Read-only: checkout + lint, nothing else.
+
+on:
+  pull_request:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  workflow-lint:
+    name: Workflow lint
+    runs-on: ubuntu-slim
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: jactionlint
+        uses: jdx/jactionlint@a65ab044e916760429068fe5794b8306abdfcbb9 # v2.3.0
+        with:
+          profile: default
