@@ -4,6 +4,11 @@ This guide configures the TG Drive Backup plugin and `tg-drive` (`td`).
 It is written for the environment where Stash runs. For Docker, that means
 the **container**, not the NAS or host operating system.
 
+The plugin requires **td >= v0.2.1**. The **TD Drive Health Check** reads
+`td version` and fails below that release (a "dev" build built from `main`
+passes with a note). v0.2.1 is released; install it with the **Install /
+Update TD Core** task or the manual steps below.
+
 ## Important security rule
 
 Do not enter any of the following in Stash plugin settings:
@@ -35,22 +40,31 @@ runtime. `td` then reuses its local session file.
 
 Open **Settings -> Plugins -> TG Drive Backup**.
 
-### Scene Upload Mode
+### Media Upload Mode
 
-Choose one mode before the first scene upload:
+Choose one mode before the first media upload. It applies to scenes, gallery
+images, and standalone images:
 
 - **`archive`** (default) sends each original file as a Telegram document.
-  Files remain byte-exact, retain their Stash library paths, and are included
-  in the Disaster Recovery restore.
-- **`browse`** sends image scenes as Telegram photos and other scenes as
-  streamable Telegram videos. Telegram may compress them. Each native caption
-  includes title, code, date, duration, resolution, and searchable
-  `#studio_*`, `#performer_*`, and `#tag_*` terms. Browse media is stored under
-  `/stash-browse`, separate from recovery media, and is intentionally excluded
-  from Disaster Recovery.
+  Folder galleries publish as document media groups mirroring the library
+  layout; zip-based galleries upload the zip itself. Files remain byte-exact,
+  retain their Stash library paths, and are included in the Disaster Recovery
+  restore.
+- **`browse`** sends scenes as streamable Telegram videos, images (standalone
+  and gallery members) as Telegram photos, and each gallery as a native
+  Telegram photo album under `/stash-browse/gallery/`. Telegram may compress
+  them. Each native caption is human-only: it shows the display name that
+  carries the plugin's title, code, date, duration, resolution, and the
+  browse name's bare studio, performer, and tag hashtags. The
+  remote path and generated `#td_*` path tags never appear in captions
+  (td v0.2.1, ADR 0021) - they live in the discussion-thread machine
+  records. Browse media
+  is stored under `/stash-browse`, separate from recovery media, and is
+  intentionally excluded from Disaster Recovery.
 
 Changing modes later publishes the selected representation separately. It does
-not delete media uploaded by the other mode.
+not delete media uploaded by the other mode. The setting was previously named
+**Scene Upload Mode**; existing installations keep their stored value.
 
 ### TD Core Path
 
@@ -90,7 +104,8 @@ Set this to a persistent directory. The plugin passes these paths to `td`:
 <data-directory>/config.toml
 <data-directory>/session.json
 <data-directory>/local_cache.db
-<data-directory>/ledger.sqlite
+<data-directory>/ledger.sqlite            (no channel configured)
+<data-directory>/ledger-<channel>.sqlite  (per explicit target channel)
 ```
 
 If it is empty, the plugin uses its excluded `td-data/` directory. This is
@@ -102,9 +117,51 @@ container directory. Do not put it inside a release zip that you publish.
 
 ### Target Telegram Channel
 
-Leave this empty to use the channel bound by `td init`. Set it only when the
-same `td` data directory contains more than one channel and you want to
-select one explicitly.
+**Backup to Telegram, Dry Run, Verify Remote & Ledger, and Adopt all require
+this setting** (there is no default channel). Set it to the channel ID (for
+example `3984479327`) or username you want to back up to. The channel must
+already exist, be bound in the same `td` data directory, and (for new
+uploads) have a linked discussion group.
+
+Each explicit channel keeps its own ledger (`ledger-<channel>.sqlite`), so
+switching channels never mis-reports another channel's files as "already
+backed up" — the new channel's uploads start fresh, and its Verify/Adopt
+scope is independent. The Setup Guide and Health Check tasks do not need
+this setting; they inspect the driver's bound channel.
+
+### Adopt Remote Directory
+
+Used by the **Adopt Existing Channel Media** task for hand-curated channels:
+`td adopt --unmanaged --into <dir>` indexes messages that were already posted
+on the channel but that the backup never published, without moving any bytes.
+The default `/adopted` keeps adopted files separate from media published by
+the plugin. Each adopted file is downloaded once so `td` can store its BLAKE3
+hash, and the plugin records it in the ledger (kind `adopted:archive`) so
+**Verify Remote & Ledger** accounts for it. Read-only in every other way:
+nothing is deleted or re-uploaded.
+
+### Scene Selection
+
+`scene_selection` controls which scenes **Backup to Telegram** uploads:
+
+- `all` (default) uploads every scene.
+- `curated` uploads only identified scenes: those with a human title, at
+  least one tag, and a stash-box match (`stash_ids`). Untitled, untagged,
+  or unmatched scenes are reported as skipped. Combine with browse mode so
+  the uploaded display names (and captions) carry real metadata instead of
+  placeholder names.
+
+## Incremental behavior
+
+- The ledger records each published file's Stash content fingerprint, so
+  when bytes change at an already-published path, the next backup re-publishes
+  the new content automatically (scenes, zip galleries, and standalone images
+  via in-place `td cp --replace`; folder-gallery album members are removed and
+  re-uploaded at their freed slot so the album index survives `td scan`).
+- **Verify Remote & Ledger** compares the remote drive index to the ledger
+  (BLAKE3 hashes via `td ls`/`tree --json`) and also runs a report-only Stash
+  deletion check: published media rows whose files no longer exist in Stash
+  are listed per kind, and nothing is modified on Telegram.
 
 ## Synology NAS with Stash Docker
 
@@ -348,6 +405,9 @@ Keep the TD data directory persistent, for example:
 TD_DATA=/var/lib/tg-drive
 sudo install -d -m 700 "$TD_DATA"
 ```
+
+An existing `/var/lib/tg-drive-cli` directory can stay. `td` keeps reading
+it while the config and database files are still there.
 
 The Stash service user must be able to read and write this directory. Run
 `auth setup`, `auth login`, and `td init` as that same service user, or grant

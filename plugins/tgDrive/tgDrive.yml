@@ -1,6 +1,6 @@
 name: TG Drive Backup
 description: Configurable, metadata-preserving backup and disaster recovery between Stash and Telegram channels via tg-drive. All Stash access goes through the GraphQL API.
-version: 0.3.0
+version: 0.7.0
 url: https://github.com/thedavidweng/stash-plugins
 
 exec:
@@ -22,17 +22,21 @@ tasks:
     defaultArgs:
       mode: install_core
   - name: Backup to Telegram
-    description: 'Incrementally uploads scene media in the selected archive or Telegram-browse mode and, per settings, a native Stash metadata export, a database snapshot, and config.yml - all produced through Stash''s GraphQL API. If setup is incomplete, run TD Drive Health Check and follow the English guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
+    description: 'Incrementally uploads scene media, galleries (native Telegram media groups), and standalone images in the selected archive or Telegram-browse mode and, per settings, a native Stash metadata export, a database snapshot, and config.yml - all produced through Stash''s GraphQL API. Requires Target Telegram Channel (no default). Changed bytes at an unchanged path are re-published automatically (single-file td cp --replace for scene/zip/standalone files; gallery album members are removed and re-uploaded at their freed slot, which keeps the album index valid across td scan). If setup is incomplete, run TD Drive Health Check and follow the English guide: https://github.com/thedavidweng/stash-plugins/blob/main/plugins/tgDrive/SETUP.md'
     defaultArgs:
       mode: backup
   - name: Dry Run Preview
     description: Simulates a backup run and logs what would be uploaded, without uploading anything.
     defaultArgs:
       mode: dry_run
-  - name: Verify Ledger & Hashes
-    description: Audits the local sync ledger and displays statistics (published, skipped, failed) without uploading or downloading.
+  - name: Verify Remote & Ledger
+    description: Audits the local sync ledger and compares every published item against the remote drive index (stored BLAKE3 hashes via td ls/tree --json) without downloading media. Reports missing files, hash mismatches, unaccounted remote files, and - report-only - published media that is missing from the current Stash library (deleted or moved; nothing is modified).
     defaultArgs:
       mode: verify
+  - name: Adopt Existing Channel Media
+    description: 'Runs td adopt --unmanaged into the configured remote directory (moves no bytes): already-posted channel messages that the backup never published become first-class drive files with BLAKE3 hashes. The plugin then records them in its ledger so Verify accounts for them. Use on a hand-curated channel you want to index without re-uploading.'
+    defaultArgs:
+      mode: adopt
   - name: Disaster Recovery Restore
     description: Rebuilds the media tree from Telegram into the configured restore directory, scans it in Stash, and imports the metadata export via GraphQL. Database/config backups are placed under stash-recovery for manual application.
     defaultArgs:
@@ -41,11 +45,27 @@ tasks:
 settings:
   backup_scenes:
     displayName: Backup Scene Media
-    description: Upload scene video files byte-exact with native Telegram video presentation. Default true.
+    description: Upload scene media byte-exact (archive mode) or as streamable Telegram videos (browse mode). Default true.
     type: BOOLEAN
+  backup_images:
+    displayName: Backup Standalone Images
+    description: Upload images that belong to no gallery. Archive mode sends byte-exact documents mirroring library paths (Disaster Recovery); browse mode sends native Telegram photos. Default true.
+    type: BOOLEAN
+  backup_galleries:
+    displayName: Backup Galleries
+    description: Upload galleries as native Telegram media groups. Archive mode sends byte-exact documents mirroring library paths (folder galleries publish their images; zip galleries publish the zip itself); browse mode sends native photo albums under /stash-browse. Default true.
+    type: BOOLEAN
+  media_upload_mode:
+    displayName: Media Upload Mode
+    description: 'archive uploads all media byte-exact as Telegram documents and supports Disaster Recovery. browse uploads scenes as streamable videos, images as photos, and galleries as native photo albums under /stash-browse; Telegram compresses media. New captions are human-only (td v0.2.1): they show the display name - the browse name carries title, code/date/duration/resolution, and bare studio/performer/tag hashtags - while the remote path and #td_* path tags stay out of captions and live in the discussion-thread machine records. Default archive.'
+    type: STRING
+  scene_selection:
+    displayName: Scene Selection
+    description: 'Which scenes Backup to Telegram uploads. all uploads every scene. curated uploads only identified scenes: those with a human title, at least one tag, and a stash-box match - the library items whose display names and hashtag terms add real value. Default all.'
+    type: STRING
   backup_metadata:
     displayName: Backup Metadata Export
-    description: Export all Stash metadata via GraphQL (scenes with markers/ratings/associations, performers, studios, tags, groups, fingerprints) and upload it to /stash-metadata/export.zip. Restorable via the Disaster Recovery task. Default true.
+    description: Export all Stash metadata via GraphQL (scenes, images, galleries with markers/ratings/associations, performers, studios, tags, groups, fingerprints) and upload it to /stash-metadata/export.zip. Restorable via the Disaster Recovery task. Default true.
     type: BOOLEAN
   backup_database:
     displayName: Backup Database Snapshot
@@ -55,13 +75,9 @@ settings:
     displayName: Backup config.yml
     description: Upload Stash's raw config.yml to /stash-backup/config/config.yml. WARNING - config.yml contains credentials (API keys, stash-box tokens). Only enable on a private channel you control. Default false.
     type: BOOLEAN
-  scene_upload_mode:
-    displayName: Scene Upload Mode
-    description: 'archive uploads byte-exact files as Telegram documents and supports Disaster Recovery. browse uploads images as photos and other scenes as streamable videos under /stash-browse; Telegram compresses media and captions contain title, code/date/duration/resolution, #studio, #performer, and #tag search terms. Default archive.'
-    type: STRING
   max_file_size_gb:
     displayName: Max File Size (GB)
-    description: Telegram ceiling per file (2.0 standard, 4.0 Premium). Scene files and database snapshots above this are skipped and reported. Default 2.0.
+    description: Telegram ceiling per file (2.0 standard, 4.0 Premium). Media files and database snapshots above this are skipped and reported. Default 2.0.
     type: NUMBER
   batch_size:
     displayName: Batch Size (Scenes per run)
@@ -93,7 +109,11 @@ settings:
     type: STRING
   target_channel:
     displayName: Target Telegram Channel
-    description: Channel ID or username (leave empty to use the default channel bound by td init).
+    description: 'Channel ID or username to back up to. Required for Backup (and Verify/Adopt run in its scope); there is no default channel. Each channel keeps its own ledger (ledger-<channel>.sqlite in the TD Data Directory), so switching channels starts that channel fresh and never mis-reports another channel as already backed up. Setup/Health do not need it.'
+    type: STRING
+  adopt_remote_dir:
+    displayName: Adopt Remote Directory
+    description: Remote directory used by the Adopt Existing Channel Media task (td adopt --unmanaged --into). Adopted messages are indexed in place under this path and recorded in the plugin ledger. Default /adopted.
     type: STRING
   restore_dir:
     displayName: Restore Target Directory

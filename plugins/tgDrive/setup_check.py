@@ -2,13 +2,41 @@
 import os
 from typing import Any, Dict, Optional
 
-from td_client import TDClient
+from settings import MIN_TD_VERSION
+from td_client import TDClient, parse_td_version
 
 
 SETUP_GUIDE_URL = (
     "https://github.com/thedavidweng/stash-plugins/blob/main/"
     "plugins/tgDrive/SETUP.md"
 )
+
+
+def version_gate(version: str) -> Dict[str, str]:
+    """
+    Check the td version against the plugin's minimum.
+
+    Release builds parse as X.Y.Z and must satisfy the minimum. "dev"
+    builds (compiled from a tg-drive checkout) contain everything main
+    has, so they pass with a note instead of a version number.
+    """
+    parsed = parse_td_version(version)
+    if parsed is None:
+        return _check(
+            "pass",
+            f"td development build ({version}); feature gate not applied",
+        )
+    minimum = parse_td_version(MIN_TD_VERSION)
+    if parsed >= (minimum or (0, 0, 0)):
+        return _check("pass", f"td {version} satisfies the required minimum v{MIN_TD_VERSION}")
+    return _check(
+        "fail",
+        f"td v{MIN_TD_VERSION}+ is required (typed uploads, native albums, remote hash audit, "
+        f"human-only captions); found {version}",
+        "Run the Install / Update TD Core task (TD Core Version latest or "
+        f"v{MIN_TD_VERSION}+), or point TD Core Path at a td binary built from "
+        "tg-drive main.",
+    )
 
 
 def _check(status: str, message: str, hint: str = "") -> Dict[str, str]:
@@ -29,6 +57,7 @@ def build_setup_report(
         "ready": False,
         "setup_guide": SETUP_GUIDE_URL,
         "td": {"path": td.td_path, "source": td_source},
+        "required_td_version": f">= v{MIN_TD_VERSION}",
         "data_directory": td.data_dir,
         "message": (
             "Complete the one-time td setup in the Stash container terminal. "
@@ -64,6 +93,7 @@ def run_health_check(td: TDClient, td_source: str) -> Dict[str, Any]:
         checks["binary"] = _check(
             "pass", f"td is available ({report['td']['version']})"
         )
+        checks["version"] = version_gate(report["td"]["version"])
     except Exception as exc:
         checks["binary"] = _check(
             "fail",
@@ -138,10 +168,11 @@ def run_health_check(td: TDClient, td_source: str) -> Dict[str, Any]:
             f"`td init`. Details: {exc}",
         )
 
-    # Readiness: binary, data directory, login and drive must pass; td doctor
-    # warnings are tolerated but doctor failures are not.
+    # Readiness: binary, version, data directory, login and drive must pass;
+    # td doctor warnings are tolerated but doctor failures are not.
     report["ready"] = (
         checks["binary"]["status"] == "pass"
+        and checks["version"]["status"] == "pass"
         and checks["data_directory"]["status"] == "pass"
         and checks["authentication"]["status"] == "pass"
         and checks["telegram"]["status"] != "fail"

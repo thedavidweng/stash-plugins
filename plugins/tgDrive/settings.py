@@ -11,6 +11,12 @@ stripped str). Consumers can trust the values without re-coercing.
 """
 from typing import Any, Callable, Dict, Optional
 
+# Minimum td (tg-drive) release the plugin codes against: typed uploads,
+# native album uploads, ls --json hashes, and human-only captions (no remote
+# path or #td_* chain in new captions, ADR 0021). Health check fails below it.
+# td "dev" builds (built from main) are accepted by the gate.
+MIN_TD_VERSION = "0.2.1"
+
 # Remote paths (fixed "latest snapshot" slots; each backup run replaces them).
 REMOTE_METADATA_EXPORT = "/stash-metadata/export.zip"
 REMOTE_DATABASE_BACKUP = "/stash-backup/database/stash-backup.zip"
@@ -21,13 +27,21 @@ REMOTE_CONFIG_BACKUP = "/stash-backup/config/config.yml"
 # browse copies never leak into the Stash library.
 SERVICE_ROOTS = ("stash-metadata", "stash-backup", "stash-browse")
 REMOTE_BROWSE_ROOT = "/stash-browse"
+# Browse sub-namespaces under REMOTE_BROWSE_ROOT. Scenes keep their legacy
+# /stash-browse/<scene-id>/ slot; images and galleries use explicit
+# namespaces because scene and image ids are independent number series.
+REMOTE_BROWSE_IMAGES = f"{REMOTE_BROWSE_ROOT}/image"
+REMOTE_BROWSE_GALLERIES = f"{REMOTE_BROWSE_ROOT}/gallery"
 
 SETTINGS_DEFAULTS: Dict[str, Any] = {
     "backup_scenes": True,
+    "backup_images": True,
+    "backup_galleries": True,
     "backup_metadata": True,
     "backup_database": True,
     "backup_config": False,
-    "scene_upload_mode": "archive",
+    "media_upload_mode": "archive",
+    "scene_selection": "all",
     "max_file_size_gb": 2.0,
     "batch_size": 50,
     "job_timeout_minutes": 120,
@@ -37,6 +51,7 @@ SETTINGS_DEFAULTS: Dict[str, Any] = {
     "td_data_dir": "",
     "td_version": "latest",
     "target_channel": "",
+    "adopt_remote_dir": "/adopted",
     "restore_dir": "",
 }
 
@@ -75,9 +90,14 @@ def _coerce_str(value: Any, default: str) -> str:
     return text if text else default
 
 
-def _coerce_scene_upload_mode(value: Any, default: str) -> str:
+def _coerce_media_upload_mode(value: Any, default: str) -> str:
     mode = _coerce_str(value, default).lower()
     return mode if mode in ("archive", "browse") else default
+
+
+def _coerce_scene_selection(value: Any, default: str) -> str:
+    selection = _coerce_str(value, default).lower()
+    return selection if selection in ("all", "curated") else default
 
 
 def _first_present(*sources: Optional[Dict[str, Any]], key: str) -> Any:
@@ -91,10 +111,13 @@ def _first_present(*sources: Optional[Dict[str, Any]], key: str) -> Any:
 # is one entry here plus one default there.
 FIELD_COERCERS: Dict[str, Callable[[Any, Any], Any]] = {
     "backup_scenes": _coerce_bool,
+    "backup_images": _coerce_bool,
+    "backup_galleries": _coerce_bool,
     "backup_metadata": _coerce_bool,
     "backup_database": _coerce_bool,
     "backup_config": _coerce_bool,
-    "scene_upload_mode": _coerce_scene_upload_mode,
+    "media_upload_mode": _coerce_media_upload_mode,
+    "scene_selection": _coerce_scene_selection,
     "max_file_size_gb": _coerce_float,
     "batch_size": _coerce_int,
     "job_timeout_minutes": _coerce_int,
@@ -104,7 +127,14 @@ FIELD_COERCERS: Dict[str, Callable[[Any, Any], Any]] = {
     "td_data_dir": _coerce_str,
     "td_version": _coerce_str,
     "target_channel": _coerce_str,
+    "adopt_remote_dir": _coerce_str,
     "restore_dir": _coerce_str,
+}
+
+# Renamed settings keep reading their old Stash-stored value when the new key
+# has never been set, so existing installations are not silently reset.
+LEGACY_SETTING_ALIASES: Dict[str, str] = {
+    "media_upload_mode": "scene_upload_mode",
 }
 
 
@@ -127,10 +157,16 @@ def load_settings(
     if stash is not None and plugin_id:
         stash_settings = stash.get_plugin_settings(plugin_id) or {}
 
+    def resolve(key: str) -> Any:
+        value = _first_present(cli_overrides, payload_settings, stash_settings, key=key)
+        if value is None and key in LEGACY_SETTING_ALIASES:
+            value = _first_present(
+                cli_overrides, payload_settings, stash_settings,
+                key=LEGACY_SETTING_ALIASES[key],
+            )
+        return value
+
     return {
-        key: coerce(
-            _first_present(cli_overrides, payload_settings, stash_settings, key=key),
-            SETTINGS_DEFAULTS[key],
-        )
+        key: coerce(resolve(key), SETTINGS_DEFAULTS[key])
         for key, coerce in FIELD_COERCERS.items()
     }

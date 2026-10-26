@@ -7,7 +7,15 @@ from unittest.mock import MagicMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from ledger import Ledger
-from tg_drive import TD_REQUIRED_MODES, TaskContext, _ledger, get_plugin_id, get_td_data_dir, parse_args
+from tg_drive import (
+    TD_REQUIRED_MODES,
+    TaskContext,
+    _channel_ledger_name,
+    _ledger,
+    get_plugin_id,
+    get_td_data_dir,
+    parse_args,
+)
 
 
 class TestHelpers(unittest.TestCase):
@@ -52,6 +60,47 @@ class TestHelpers(unittest.TestCase):
 
             self.assertEqual(migrated.get("/scene.mp4")["status"], "published")
             self.assertTrue(os.path.exists(os.path.join(data_dir, "ledger.sqlite")))
+
+    def test_channel_ledger_name_is_file_safe(self):
+        self.assertEqual(_channel_ledger_name("3984479327"), "ledger-3984479327.sqlite")
+        self.assertEqual(_channel_ledger_name("NSFW"), "ledger-NSFW.sqlite")
+        # unsafe characters are collapsed; the name can never escape the dir
+        self.assertEqual(_channel_ledger_name("a/b\\c:d"), "ledger-a_b_c_d.sqlite")
+        self.assertEqual(_channel_ledger_name(""), "ledger-channel.sqlite")
+
+    def test_ledger_scopes_by_channel(self):
+        """Explicit channels get per-channel ledgers; unset channels the default."""
+        with tempfile.TemporaryDirectory() as data_dir:
+            scoped = MagicMock(spec=TaskContext)
+            scoped.data_dir = data_dir
+            scoped.channel = "3984479327"
+            ledger = _ledger(scoped)
+            self.assertEqual(ledger.db_path, os.path.join(data_dir, "ledger-3984479327.sqlite"))
+
+            unscoped = MagicMock(spec=TaskContext)
+            unscoped.data_dir = data_dir
+            unscoped.channel = None
+            default_ledger = _ledger(unscoped)
+            self.assertEqual(default_ledger.db_path, os.path.join(data_dir, "ledger.sqlite"))
+
+    def test_run_backup_requires_explicit_channel(self):
+        """A backup without Target Telegram Channel is refused, never defaulted."""
+        from tg_drive import run_backup
+
+        ctx = MagicMock(spec=TaskContext)
+        ctx.channel = None
+        ctx.settings = {}
+        ctx.stash = MagicMock()
+        ctx.td = MagicMock()
+        ctx.dry_run = False
+        ctx.data_dir = "/tmp"
+
+        output = run_backup(ctx)
+        self.assertEqual(output["status"], "error")
+        self.assertIn("Target Telegram Channel", output["message"])
+        ctx.td.cp.assert_not_called()
+        ctx.td.upload_file.assert_not_called()
+        ctx.stash.find_scenes.assert_not_called()
 
 
 if __name__ == "__main__":

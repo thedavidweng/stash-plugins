@@ -15,9 +15,26 @@ ordering), which setup_check reuses for the copy-paste setup instructions.
 """
 import json
 import os
+import re
 import shlex
 import subprocess
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+
+def parse_td_version(version: str) -> Optional[Tuple[int, int, int]]:
+    """
+    Parse a td version string ("0.2.1", "v0.2.0") into a comparable tuple.
+
+    Returns None for non-release builds ("dev", "unknown"): those are built
+    from source that already contains the features the version gate guards,
+    so callers treat them as pass-with-note rather than fail.
+    """
+    if not version:
+        return None
+    m = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", version.strip())
+    if not m:
+        return None
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0))
 
 
 class TDError(Exception):
@@ -190,10 +207,101 @@ class TDClient:
             return data
         return data.get("entries", [])
 
+    def tree(self, remote_path: str = "/", depth: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Return the whole nested remote tree in one index-only call.
+
+        Entries are {type, name, path, children}. File entries carry only the
+        path here; per-file size and hash come from list_dir, whose file
+        entries always carry the stored BLAKE3 hash (td json contract).
+        """
+        args = [remote_path]
+        if depth is not None:
+            args.extend(["--depth", str(depth)])
+        data = self._exec(self._build_cmd("tree", args))
+        if isinstance(data, dict):
+            return data.get("tree", [])
+        return data if isinstance(data, list) else []
+
+    def upload_album(
+        self,
+        local_paths: List[str],
+        remote_dir: str,
+        as_kind: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Publish >=2 local files as native Telegram media groups (td cp
+        multi-file form): automatic split at 10 members per group, one human
+        caption on the first member, one td-album:v1 inventory per group.
+
+        remote_dir must end with "/" (or be "/") so td treats it as a
+        directory; members are published at remote_dir/<local-basename>.
+        --replace is not supported in this form (ERR_USAGE). Response shape:
+        {uploaded, skipped, errors, albums: [{grouped_id, reply_message_id,
+        message_ids, paths}], channel_id, invite_link?}; message_ids align
+        with paths positionally.
+        """
+        if len(local_paths) < 2:
+            raise TDError("album upload requires at least two local files")
+        if not remote_dir.endswith("/"):
+            remote_dir += "/"
+        args = list(local_paths) + [remote_dir]
+        if as_kind:
+            args.extend(["--as", as_kind])
+        # --wait absorbs Telegram flood waits in-process, same as single
+        # uploads; presentation flags apply uniformly to every group member.
+        args.append("--wait")
+        cmd = self._build_cmd("cp", args)
+        return self._exec(cmd)
+
     def scan(self, full: bool = True) -> Dict[str, Any]:
         """Trigger td scan to rebuild or update index from Telegram."""
         args = ["--full"] if full else []
         cmd = self._build_cmd("scan", args)
+        return self._exec(cmd)
+
+    def remove(self, remote_path: str, confirm: bool = True) -> Dict[str, Any]:
+        """
+        Delete a remote file from the drive index (td rm). Albums cannot
+        --replace, so removing an album member slot before re-uploading it
+        is the scan-safe update path (probe-verified: a fresh cp at the
+        freed path keeps the album index valid after scan --full).
+        """
+        args = [remote_path]
+        if confirm:
+            args.append("--confirm")
+        cmd = self._build_cmd("rm", args)
+        return self._exec(cmd)
+
+    def adopt(
+        self,
+        message_id: Optional[int] = None,
+        remote_path: Optional[str] = None,
+        unmanaged: bool = False,
+        into: str = "/",
+        with_hash: bool = True,
+        confirm: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Adopt existing channel messages into the td index (ADR 0019; moves
+        no bytes). --unmanaged claims every unmanaged media/text message
+        into a remote directory prefix; with_hash downloads each file to
+        compute its BLAKE3 content hash so later downloads verify.
+        """
+        args = []
+        if message_id is not None:
+            args.append(str(message_id))
+        if remote_path is not None:
+            args.append(remote_path)
+        if unmanaged:
+            args.append("--unmanaged")
+        if into:
+            args.extend(["--into", into])
+        if with_hash:
+            args.append("--hash")
+        if confirm:
+            args.append("--confirm")
+        cmd = self._build_cmd("adopt", args)
         return self._exec(cmd)
 
     def download(
