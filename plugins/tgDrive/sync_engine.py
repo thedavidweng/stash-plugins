@@ -621,19 +621,15 @@ class SyncEngine:
 
     # ------------------------------------------------------ galleries & images
 
-    def _sweep_images(
-        self,
-        limit: Optional[int] = None,
-    ) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], int]:
+    def _sweep_images(self) -> Tuple[Dict[str, List[Dict[str, Any]]], List[Dict[str, Any]], int]:
         """
         One paged findImages pass classifying images by gallery membership.
 
         Returns (images_by_gallery, standalone_images, total). Gallery
         membership comes from the images side: every image lists its
-        galleries, so no per-gallery image query is needed. `limit` bounds
-        how many images are swept (the run's batch budget); images beyond
-        it are left for a later run, so a preview or small batch cannot
-        stall on a huge image library.
+        galleries, so no per-gallery image query is needed. The complete
+        library is required: truncating a repeatable sorted query would
+        permanently omit the tail and publish incomplete gallery albums.
         """
         by_gallery: Dict[str, List[Dict[str, Any]]] = {}
         standalone: List[Dict[str, Any]] = []
@@ -642,12 +638,6 @@ class SyncEngine:
         page = 1
         per_page = 100
         while True:
-            if limit is not None and processed >= limit:
-                log.LogInfo(
-                    f"Image sweep stopped at batch limit of {limit} images "
-                    f"(library has {total or '?'})"
-                )
-                break
             data = self.stash.find_images(page=page, per_page=per_page)
             if total is None:
                 total = data.get("count", 0)
@@ -658,8 +648,6 @@ class SyncEngine:
             if not images:
                 break
             for image in images:
-                if limit is not None and processed >= limit:
-                    break
                 processed += 1
                 gallery_ids = [
                     str(g.get("id"))
@@ -671,7 +659,7 @@ class SyncEngine:
                         by_gallery.setdefault(gid, []).append(image)
                 else:
                     standalone.append(image)
-            if processed >= total or (limit is not None and processed >= limit):
+            if processed >= total:
                 break
             page += 1
         log.LogInfo(
@@ -1516,13 +1504,10 @@ class SyncEngine:
 
             # 5. Galleries and standalone images. The image sweep is shared:
             # one paged findImages pass classifies every image by gallery
-            # membership before either consumer runs. The run's batch
-            # budget applies across media kinds: when scenes consumed it (or
-            # a preview run bounds it), the sweep stops early instead of
-            # walking a huge image library for zero published items.
-            remaining = max(batch_limit - report["scenes_published"], 0) if batch_limit else None
+            # membership before either consumer runs. batch_size limits
+            # scenes; gallery membership must be complete on every run.
             if self.settings["backup_galleries"] or self.settings["backup_images"]:
-                sweep = self._sweep_images(limit=remaining)
+                sweep = self._sweep_images()
             else:
                 sweep = None
                 log.LogInfo("Gallery and image backup disabled in settings")
