@@ -27,6 +27,7 @@ import sys
 import tempfile
 import unittest
 import zipfile
+from contextlib import closing
 from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -326,7 +327,7 @@ class OfflineE2E(unittest.TestCase):
 
     def _ledger_rows(self):
         db = self._ledger_path()
-        with sqlite3.connect(db) as conn:
+        with closing(sqlite3.connect(db)) as conn:
             conn.row_factory = sqlite3.Row
             return [dict(row) for row in conn.execute(
                 "SELECT canonical_path, kind, status, remote_path, blake3, message_id "

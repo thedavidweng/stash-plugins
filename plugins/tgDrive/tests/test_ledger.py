@@ -2,6 +2,7 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import closing
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -97,7 +98,7 @@ class TestLedger(unittest.TestCase):
         self.assertEqual(row["size"], 1200)
     def test_legacy_ledger_gains_fingerprint_column(self):
         import sqlite3
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("DROP TABLE ledger_items")
             conn.execute("""
                 CREATE TABLE ledger_items (
@@ -132,7 +133,7 @@ class TestLedger(unittest.TestCase):
     def test_legacy_ledger_gains_remote_path_column(self):
         # a ledger created before remote_path existed must migrate in place
         import sqlite3
-        with sqlite3.connect(self.db_path) as conn:
+        with closing(sqlite3.connect(self.db_path)) as conn, conn:
             conn.execute("DROP TABLE ledger_items")
             conn.execute("""
                 CREATE TABLE ledger_items (
